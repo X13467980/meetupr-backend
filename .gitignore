@@ -1,0 +1,49 @@
+# Compiled binary executables
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Output directories
+/bin/
+/build/
+/dist/
+/out/
+
+# Package objects
+/pkg/
+
+# Vendor (uncomment if you commit vendor/; otherwise keep ignored)
+vendor/
+Godeps/
+
+# Go coverage and profiling
+coverage.out
+*.prof
+
+# Generated files
+*_generated.go
+*_gen.go
+**/generated/**
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*~
+.project
+.classpath
+
+# Environment and logs
+.env
+*.log
+
+# Misc
+*.tmp
