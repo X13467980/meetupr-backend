@@ -40,4 +40,10 @@ func TestWebSocketEcho(t *testing.T) {
 	if string(p) != testMessage {
 		t.Errorf("handler returned unexpected body: got %v want %v", string(p), testMessage)
 	}
+
+	// サーバーに正常なクローズメッセージを送信
+	err = ws.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+	if err != nil {
+		t.Fatalf("Write close message failed: %v", err)
+	}
 }

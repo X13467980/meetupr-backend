@@ -26,7 +26,10 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	for {
 		messageType, message, err := conn.ReadMessage()
 		if err != nil {
-			log.Printf("Error reading message: %v", err)
+			// クライアントが正常に接続を閉じた場合は、エラーログを出力せずにループを抜ける
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				log.Printf("Error reading message: %v", err)
+			}
 			break
 		}
 		log.Printf("Received: %s", message)
