@@ -3,11 +3,13 @@ package main
 import (
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"meetupr-backend/internal/auth"
+	"meetupr-backend/internal/db"
 	"meetupr-backend/internal/handlers"
 )
 
@@ -19,6 +21,10 @@ func main() {
 
 	// Initialize the authentication service
 	auth.Init()
+
+	// Initialize database connection
+	db.InitDB()
+	defer db.CloseDB() // Close DB connection when main exits
 
 	// Initialize Echo
 	e := echo.New()

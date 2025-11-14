@@ -88,6 +88,16 @@ func (c *Client) readPump() {
 		msg.SenderID = c.userID
 		msg.Timestamp = time.Now()
 
+		// Save message to database
+		_, err = db.DB.Exec(
+			"INSERT INTO messages (chat_id, sender_id, content, message_type, sent_at) VALUES ($1, $2, $3, $4, $5)",
+			msg.ChatID, msg.SenderID, msg.Content, msg.Type, msg.Timestamp,
+		)
+		if err != nil {
+			log.Printf("Error saving message to database: %v", err)
+			// Continue to broadcast even if saving fails, or handle as appropriate
+		}
+
 		c.hub.broadcast <- msg // broadcast channel now takes Message struct
 	}
 }
