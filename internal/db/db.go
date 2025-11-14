@@ -8,8 +8,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/nedpals/supabase-go"
 	"meetupr-backend/internal/models"
+
+	"github.com/nedpals/supabase-go"
 )
 
 var Supabase *supabase.Client
@@ -70,17 +71,17 @@ func GetUserByID(userID string) (*models.UserProfileResponse, error) {
 	}
 
 	profileResponse := &models.UserProfileResponse{
-		UserID:          user.ID,
-		Email:           user.Email,
-		Username:        user.Username,
-		Major:           user.Major,
-		Gender:          user.Gender,
-		NativeLanguage:  user.NativeLanguage,
-		SpokenLanguages: user.SpokenLanguages,
+		UserID:            user.ID,
+		Email:             user.Email,
+		Username:          user.Username,
+		Major:             user.Major,
+		Gender:            user.Gender,
+		NativeLanguage:    user.NativeLanguage,
+		SpokenLanguages:   user.SpokenLanguages,
 		LearningLanguages: user.LearningLanguages,
-		Residence:       user.Residence,
-		Comment:         user.Comment,
-		LastUpdated:     user.LastUpdatedAt,
+		Residence:         user.Residence,
+		Comment:           user.Comment,
+		LastUpdated:       user.LastUpdatedAt,
 	}
 
 	// Populate interests
@@ -98,14 +99,14 @@ func GetUserByID(userID string) (*models.UserProfileResponse, error) {
 func UpdateUserProfile(userID string, req models.UpdateUserProfileRequest) (*models.UserProfileResponse, error) {
 	// Update profiles table
 	profileUpdate := map[string]interface{}{
-		"major":             req.Major,
-		"gender":            req.Gender,
-		"native_language":   req.NativeLanguage,
-		"spoken_languages":  req.SpokenLanguages,
+		"major":              req.Major,
+		"gender":             req.Gender,
+		"native_language":    req.NativeLanguage,
+		"spoken_languages":   req.SpokenLanguages,
 		"learning_languages": req.LearningLanguages,
-		"residence":         req.Residence,
-		"comment":           req.Comment,
-		"last_updated":      time.Now(),
+		"residence":          req.Residence,
+		"comment":            req.Comment,
+		"last_updated":       time.Now(),
 	}
 
 	var profileResults []map[string]interface{}
@@ -135,8 +136,8 @@ func UpdateUserProfile(userID string, req models.UpdateUserProfileRequest) (*mod
 	var userInterests []map[string]interface{}
 	for _, interestID := range req.InterestIDs {
 		userInterests = append(userInterests, map[string]interface{}{
-			"user_id":    userID,
-			"interest_id": interestID,
+			"user_id":          userID,
+			"interest_id":      interestID,
 			"preference_level": 3, // Default preference level
 		})
 	}
@@ -193,4 +194,14 @@ func GetUserProfile(userID string) (*models.User, error) {
 	}
 
 	return &user, nil
+}
+
+// GetInterests returns the list of available interests (master data).
+func GetInterests() ([]models.Interest, error) {
+	var interests []models.Interest
+	err := Supabase.DB.From("interests").Select("id, name, category").Execute(&interests)
+	if err != nil {
+		return nil, err
+	}
+	return interests, nil
 }

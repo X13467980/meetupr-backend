@@ -5,12 +5,13 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/joho/godotenv"
-	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
 	"meetupr-backend/internal/auth"
 	"meetupr-backend/internal/db"
 	"meetupr-backend/internal/handlers"
+
+	"github.com/joho/godotenv"
+	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 
 	echoSwagger "github.com/swaggo/echo-swagger"
 )
@@ -62,6 +63,10 @@ func main() {
 	userGroup.PUT("/me", handlers.UpdateMyProfile, auth.EchoJWTMiddleware())
 	userGroup.GET("", handlers.SearchUsers, auth.EchoJWTMiddleware())
 	userGroup.GET("/:userId", handlers.GetUserProfile, auth.EchoJWTMiddleware())
+
+	// Interests routes
+	interestGroup := apiV1.Group("/interests")
+	interestGroup.GET("", handlers.GetInterests, auth.EchoJWTMiddleware())
 
 	// WebSocket route with JWT middleware
 	e.GET("/ws/chat/:chatID", func(c echo.Context) error {
