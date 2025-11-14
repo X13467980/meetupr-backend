@@ -67,7 +67,7 @@ func EchoJWTMiddleware() echo.MiddlewareFunc {
 			claims := jwt.MapClaims{}
 
 			// Parse and validate the token
-			token, err := jwt.ParseWithClaims(tokenString, claims, jwks.Keyfunc, jwt.WithAudience(audience), jwt.WithIssuer(issuer))
+			token, err := jwt.ParseWithClaims(tokenString, claims, jwks.Keyfunc)
 			if err != nil {
 				return echo.NewHTTPError(http.StatusUnauthorized, "Failed to parse or validate token: "+err.Error())
 			}
