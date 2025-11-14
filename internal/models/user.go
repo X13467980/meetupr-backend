@@ -23,6 +23,7 @@ type Interest struct {
 	ID              int    `json:"id"`
 	Name            string `json:"name"`
 	PreferenceLevel int    `json:"preference_level,omitempty"`
+	Category        string `json:"category,omitempty"`
 }
 
 type UserProfileResponse struct {
@@ -54,24 +55,4 @@ type UpdateUserProfileRequest struct {
 	Residence         string   `json:"residence"`
 	Comment           string   `json:"comment"`
 	InterestIDs       []int    `json:"interest_ids"`
-}
-
-// Message: チャットメッセージを表します。
-type Message struct {
-	ID                int64     `json:"id"`
-	ChatID            int64     `json:"chat_id"`
-	SenderID          string    `json:"sender_id"`
-	Content           string    `json:"content"`
-	TranslatedContent string    `json:"translated_content,omitempty"`
-	MessageType       string    `json:"message_type"`
-	SentAt            time.Time `json:"sent_at"`
-}
-
-// ChatResponse: チャットルームの詳細情報を表します。
-type ChatResponse struct {
-	ID               int64     `json:"id"`
-	User1ID          string    `json:"user1_id"`
-	User2ID          string    `json:"user2_id"`
-	AISuggestedTheme string    `json:"ai_suggested_theme,omitempty"`
-	CreatedAt        time.Time `json:"created_at"`
 }

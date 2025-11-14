@@ -64,7 +64,11 @@ func main() {
 	userGroup.GET("", handlers.SearchUsers, auth.EchoJWTMiddleware())
 	userGroup.GET("/:userId", handlers.GetUserProfile, auth.EchoJWTMiddleware())
 
-	// chats ルートを登録: GET /api/v1/chats と GET /api/v1/chats/{chatId}/messages を認証ミドルウェア付きで登録します
+	// Interests routes
+	interestGroup := apiV1.Group("/interests")
+	interestGroup.GET("", handlers.GetInterests, auth.EchoJWTMiddleware())
+
+	// Chat routes
 	chatGroup := apiV1.Group("/chats")
 	chatGroup.GET("", handlers.GetChats, auth.EchoJWTMiddleware())
 	chatGroup.GET("/:chatId/messages", handlers.GetChatMessages, auth.EchoJWTMiddleware())

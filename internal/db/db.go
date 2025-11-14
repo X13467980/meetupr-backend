@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strconv"
 	"time"
 
@@ -196,41 +197,165 @@ func GetUserProfile(userID string) (*models.User, error) {
 	return &user, nil
 }
 
-// GetChats: 指定されたユーザーが参加しているチャットルーム一覧を取得します。
-func GetChats(userID string) ([]models.ChatResponse, error) {
-	var chats []models.ChatResponse
-	// user1_id または user2_id が userID と一致するチャットを取得
-	err := Supabase.DB.From("chats").
-		Select("*").
-		Filter("user1_id", "eq", userID).
-		Execute(&chats)
+// GetInterests returns the list of available interests (master data).
+func GetInterests() ([]models.Interest, error) {
+	var interests []models.Interest
+	err := Supabase.DB.From("interests").Select("id, name, category").Execute(&interests)
 	if err != nil {
 		return nil, err
 	}
+	return interests, nil
+}
 
-	var chats2 []models.ChatResponse
-	err = Supabase.DB.From("chats").
-		Select("*").
-		Filter("user2_id", "eq", userID).
-		Execute(&chats2)
-	if err != nil {
-		return nil, err
+// GetUserChats returns all chat rooms that a user is participating in
+func GetUserChats(userID string) ([]models.Chat, error) {
+	// Get chats where user is user1
+	var results1 []json.RawMessage
+	err1 := Supabase.DB.From("chats").
+		Select("id, user1_id, user2_id, ai_suggested_theme, created_at").
+		Eq("user1_id", userID).
+		Execute(&results1)
+
+	// Get chats where user is user2
+	var results2 []json.RawMessage
+	err2 := Supabase.DB.From("chats").
+		Select("id, user1_id, user2_id, ai_suggested_theme, created_at").
+		Eq("user2_id", userID).
+		Execute(&results2)
+
+	if err1 != nil && err2 != nil {
+		return nil, fmt.Errorf("failed to get chats: %v, %v", err1, err2)
 	}
 
-	// 両方の結果をマージ（重複排除は後処理）
-	chats = append(chats, chats2...)
+	// Merge results and deduplicate by chat ID
+	chatMap := make(map[int64]models.Chat)
+
+	// Process results1
+	if err1 == nil {
+		for _, result := range results1 {
+			var chat models.Chat
+			if err := json.Unmarshal(result, &chat); err != nil {
+				log.Printf("error unmarshalling chat: %v", err)
+				continue
+			}
+			chatMap[chat.ID] = chat
+		}
+	}
+
+	// Process results2
+	if err2 == nil {
+		for _, result := range results2 {
+			var chat models.Chat
+			if err := json.Unmarshal(result, &chat); err != nil {
+				log.Printf("error unmarshalling chat: %v", err)
+				continue
+			}
+			chatMap[chat.ID] = chat
+		}
+	}
+
+	// Convert map to slice and populate additional info
+	var chats []models.Chat
+	for _, chat := range chatMap {
+		// Determine the other user ID
+		var otherUserID string
+		if chat.User1ID == userID {
+			otherUserID = chat.User2ID
+		} else {
+			otherUserID = chat.User1ID
+		}
+
+		// Get the other user's basic info
+		otherUser, err := GetUserProfile(otherUserID)
+		if err != nil {
+			log.Printf("error getting other user profile: %v", err)
+		} else {
+			chat.OtherUser = otherUser
+		}
+
+		// Get the last message (optimized: only fetch the last one)
+		lastMsg, err := GetLastChatMessage(chat.ID)
+		if err == nil && lastMsg != nil {
+			chat.LastMessage = lastMsg
+		}
+
+		chats = append(chats, chat)
+	}
+
+	// Sort chats by created_at descending (most recent first)
+	sort.Slice(chats, func(i, j int) bool {
+		return chats[i].CreatedAt.After(chats[j].CreatedAt)
+	})
+
 	return chats, nil
 }
 
-// GetChatMessages: 指定されたチャットルームのメッセージ履歴を取得します。
-func GetChatMessages(chatID int64) ([]models.Message, error) {
+// GetLastChatMessage returns the last message in a chat room
+func GetLastChatMessage(chatID int64) (*models.Message, error) {
 	var messages []models.Message
 	err := Supabase.DB.From("messages").
-		Select("*").
-		Filter("chat_id", "eq", strconv.FormatInt(chatID, 10)).
+		Select("id, chat_id, sender_id, content, translated_content, message_type, sent_at").
+		Eq("chat_id", strconv.FormatInt(chatID, 10)).
 		Execute(&messages)
 	if err != nil {
 		return nil, err
 	}
+
+	if len(messages) == 0 {
+		return nil, nil
+	}
+
+	// Sort messages by sent_at descending (newest first) and return the first one
+	sort.Slice(messages, func(i, j int) bool {
+		return messages[i].SentAt.After(messages[j].SentAt)
+	})
+
+	return &messages[0], nil
+}
+
+// GetChatMessages returns all messages in a chat room
+func GetChatMessages(chatID int64) ([]models.Message, error) {
+	var messages []models.Message
+	err := Supabase.DB.From("messages").
+		Select("id, chat_id, sender_id, content, translated_content, message_type, sent_at").
+		Eq("chat_id", strconv.FormatInt(chatID, 10)).
+		Execute(&messages)
+	if err != nil {
+		return nil, err
+	}
+
+	// Sort messages by sent_at ascending (oldest first)
+	sort.Slice(messages, func(i, j int) bool {
+		return messages[i].SentAt.Before(messages[j].SentAt)
+	})
+
 	return messages, nil
+}
+
+// IsChatParticipant checks if a user is a participant in a chat room
+func IsChatParticipant(chatID int64, userID string) (bool, error) {
+	// First, get the chat
+	var results []json.RawMessage
+	err := Supabase.DB.From("chats").
+		Select("id, user1_id, user2_id").
+		Eq("id", strconv.FormatInt(chatID, 10)).
+		Execute(&results)
+	if err != nil {
+		return false, err
+	}
+	if len(results) == 0 {
+		return false, nil
+	}
+
+	// Check if user is either user1 or user2
+	var chat struct {
+		ID      int64  `json:"id"`
+		User1ID string `json:"user1_id"`
+		User2ID string `json:"user2_id"`
+	}
+	if err := json.Unmarshal(results[0], &chat); err != nil {
+		return false, err
+	}
+
+	return chat.User1ID == userID || chat.User2ID == userID, nil
 }
