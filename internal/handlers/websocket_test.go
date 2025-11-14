@@ -10,8 +10,14 @@ import (
 )
 
 func TestWebSocketEcho(t *testing.T) {
+	// Create a new Hub for testing
+	hub := NewHub()
+	go hub.Run()
+
 	// Test server
-	server := httptest.NewServer(http.HandlerFunc(WsHandler))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		WsHandler(hub, w, r)
+	}))
 	defer server.Close()
 
 	// Convert http:// to ws://
@@ -30,7 +36,7 @@ func TestWebSocketEcho(t *testing.T) {
 		t.Fatalf("WriteMessage failed: %v", err)
 	}
 
-	// Receive echo message
+	// Receive echo message (from broadcast)
 	_, p, err := ws.ReadMessage()
 	if err != nil {
 		t.Fatalf("ReadMessage failed: %v", err)

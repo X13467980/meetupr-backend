@@ -11,11 +11,17 @@ import (
 )
 
 func TestWebSocketEcho(t *testing.T) {
-	// テスト用のHTTPサーバーをセットアップ
-	server := httptest.NewServer(http.HandlerFunc(handlers.WsHandler))
+	// Create a new Hub for testing
+	hub := handlers.NewHub()
+	go hub.Run()
+
+	// Test server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handlers.WsHandler(hub, w, r)
+	}))
 	defer server.Close()
 
-	// HTTP URLをWebSocket URL (ws://) に変換
+	// Convert http:// to ws://
 	u := "ws" + strings.TrimPrefix(server.URL, "http")
 
 	// WebSocketサーバーに接続
