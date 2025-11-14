@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"meetupr-backend/internal/db"
@@ -217,32 +218,28 @@ func WsHandler(hub *Hub, w http.ResponseWriter, r *http.Request, chatID int64, u
 }
 
 func saveMessage(m *Message) error {
-	query := `INSERT INTO messages (chat_id, sender_id, content, message_type) VALUES ($1, $2, $3, $4)`
-	_, err := db.DB.Exec(query, m.ChatID, m.SenderID, m.Content, "text") // Assuming message_type is always "text" for now
+	// Supabase API経由でメッセージを挿入
+	messageData := map[string]interface{}{
+		"chat_id":      m.ChatID,
+		"sender_id":    m.SenderID,
+		"content":      m.Content,
+		"message_type": "text", // Assuming message_type is always "text" for now
+	}
+
+	var results []map[string]interface{}
+	err := db.Supabase.DB.From("messages").Insert(messageData).Execute(&results)
 	return err
 }
 
 func loadMessageHistory(c *Client) {
-	query := `SELECT content, sender_id FROM messages WHERE chat_id = $1 ORDER BY sent_at ASC`
-
-rows, err := db.DB.Query(query, c.chatID)
+	var messages []Message
+	err := db.Supabase.DB.From("messages").Select("content, sender_id").Eq("chat_id", strconv.FormatInt(c.chatID, 10)).Execute(&messages)
 	if err != nil {
-		log.Printf("error loading message history: %v", err)
+		log.Printf("error loading message history from Supabase: %v", err)
 		return
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var content, senderID string
-		if err := rows.Scan(&content, &senderID); err != nil {
-			log.Printf("error scanning message row: %v", err)
-			continue
-		}
-		msg := Message{
-			Content:  content,
-			ChatID:   c.chatID,
-			SenderID: senderID,
-		}
+	for _, msg := range messages {
 		jsonMessage, err := json.Marshal(msg)
 		if err != nil {
 			log.Printf("error marshalling history message: %v", err)
