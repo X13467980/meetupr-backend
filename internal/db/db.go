@@ -1,8 +1,11 @@
 package db
 
 import (
+	"encoding/json"
+	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/nedpals/supabase-go"
@@ -51,9 +54,18 @@ func CreateUser(user models.User) error {
 }
 
 func GetUserByID(userID string) (*models.UserProfileResponse, error) {
-	var user models.User
-	err := Supabase.DB.From("users").Select("*, profiles(*), user_interests(*, interests(*))").Eq("id", userID).Single().Execute(&user)
+	var results []json.RawMessage
+	err := Supabase.DB.From("users").Select("*, profiles(*), user_interests(*, interests(*))").Eq("id", userID).Execute(&results)
 	if err != nil {
+		return nil, err
+	}
+
+	if len(results) == 0 {
+		return nil, fmt.Errorf("user not found")
+	}
+
+	var user models.User
+	if err := json.Unmarshal(results[0], &user); err != nil {
 		return nil, err
 	}
 
@@ -114,7 +126,7 @@ func UpdateUserProfile(userID string, req models.UpdateUserProfileRequest) (*mod
 
 	// Update user_interests table
 	// First, delete existing interests for the user
-	_, err = Supabase.DB.From("user_interests").Delete().Eq("user_id", userID).Execute(nil)
+	err = Supabase.DB.From("user_interests").Delete().Eq("user_id", userID).Execute(nil)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +142,7 @@ func UpdateUserProfile(userID string, req models.UpdateUserProfileRequest) (*mod
 	}
 
 	if len(userInterests) > 0 {
-		_, err = Supabase.DB.From("user_interests").Insert(userInterests).Execute(nil)
+		err = Supabase.DB.From("user_interests").Insert(userInterests).Execute(nil)
 		if err != nil {
 			return nil, err
 		}
@@ -144,15 +156,15 @@ func SearchUsers(interestID int, learningLanguage, spokenLanguage string) ([]mod
 	query := Supabase.DB.From("users").Select("*, profiles(*), user_interests(*, interests(*))")
 
 	if interestID != 0 {
-		query = query.Filter("user_interests.interest_id", "eq", interestID)
+		query.Filter("user_interests.interest_id", "eq", strconv.Itoa(interestID))
 	}
 
 	if learningLanguage != "" {
-		query = query.Filter("profiles.learning_languages", "cs", []string{learningLanguage})
+		query.Filter("profiles.learning_languages", "cs", fmt.Sprintf("{%s}", learningLanguage))
 	}
 
 	if spokenLanguage != "" {
-		query = query.Filter("profiles.spoken_languages", "cs", []string{spokenLanguage})
+		query.Filter("profiles.spoken_languages", "cs", fmt.Sprintf("{%s}", spokenLanguage))
 	}
 
 	var users []models.User
@@ -165,9 +177,18 @@ func SearchUsers(interestID int, learningLanguage, spokenLanguage string) ([]mod
 }
 
 func GetUserProfile(userID string) (*models.User, error) {
-	var user models.User
-	err := Supabase.DB.From("users").Select("id, username, profiles(major, gender, native_language, spoken_languages, learning_languages, residence, comment), user_interests(interests(id, name), preference_level)").Eq("id", userID).Single().Execute(&user)
+	var results []json.RawMessage
+	err := Supabase.DB.From("users").Select("id, username, profiles(major, gender, native_language, spoken_languages, learning_languages, residence, comment), user_interests(interests(id, name), preference_level)").Eq("id", userID).Execute(&results)
 	if err != nil {
+		return nil, err
+	}
+
+	if len(results) == 0 {
+		return nil, fmt.Errorf("user not found")
+	}
+
+	var user models.User
+	if err := json.Unmarshal(results[0], &user); err != nil {
 		return nil, err
 	}
 

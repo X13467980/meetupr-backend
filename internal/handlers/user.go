@@ -7,6 +7,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"meetupr-backend/internal/db"
 	"meetupr-backend/internal/models"
+	"strconv"
 )
 
 // RegisterUser godoc
