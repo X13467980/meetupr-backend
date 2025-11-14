@@ -1,31 +1,25 @@
 package db
 
 import (
-	"database/sql"
-	"fmt"
 	"log"
 	"os"
 
-	_ "github.com/lib/pq"
+	"github.com/nedpals/supabase-go"
 )
 
-var DB *sql.DB
+var Supabase *supabase.Client
 
 func Init() {
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		log.Fatal("DATABASE_URL environment variable not set")
+	supabaseURL := os.Getenv("SUPABASE_URL")
+	if supabaseURL == "" {
+		log.Fatal("SUPABASE_URL environment variable not set")
 	}
 
-	var err error
-	DB, err = sql.Open("postgres", dbURL)
-	if err != nil {
-		log.Fatalf("Unable to connect to database: %v\n", err)
+	supabaseKey := os.Getenv("SUPABASE_KEY")
+	if supabaseKey == "" {
+		log.Fatal("SUPABASE_KEY environment variable not set")
 	}
 
-	if err = DB.Ping(); err != nil {
-		log.Fatalf("Unable to ping database: %v\n", err)
-	}
-
-	fmt.Println("Successfully connected to the database")
+	Supabase = supabase.CreateClient(supabaseURL, supabaseKey)
+	log.Println("Successfully connected to Supabase")
 }
