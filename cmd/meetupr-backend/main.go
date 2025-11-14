@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
@@ -37,8 +38,19 @@ func main() {
 	})
 
 	// WebSocket route with JWT middleware
-	e.GET("/ws", func(c echo.Context) error {
-		handlers.WsHandler(hub, c.Response(), c.Request())
+	e.GET("/ws/chat/:chatID", func(c echo.Context) error {
+		chatIDStr := c.Param("chatID")
+		chatID, err := strconv.ParseInt(chatIDStr, 10, 64)
+		if err != nil {
+			return c.String(http.StatusBadRequest, "Invalid chat ID")
+		}
+
+		userID, ok := c.Get("user_id").(string)
+		if !ok || userID == "" {
+			return c.String(http.StatusUnauthorized, "User ID not found in token")
+		}
+
+		handlers.WsHandler(hub, c.Response(), c.Request(), chatID, userID)
 		return nil
 	}, auth.EchoJWTMiddleware())
 

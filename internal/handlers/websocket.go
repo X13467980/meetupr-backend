@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 	"time"
@@ -9,16 +10,9 @@ import (
 )
 
 const (
-	// Time allowed to write a message to the peer.
-	writeWait = 10 * time.Second
-
-	// Time allowed to read the next pong message from the peer.
-	pongWait = 60 * time.Second
-
-	// Send pings to peer with this period. Must be less than pongWait.
-	pingPeriod = (pongWait * 9) / 10
-
-	// Maximum message size allowed from peer.
+	writeWait      = 10 * time.Second
+	pongWait       = 60 * time.Second
+	pingPeriod     = (pongWait * 9) / 10
 	maxMessageSize = 512
 )
 
@@ -26,24 +20,26 @@ var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
-		// In production, you should check the origin to prevent CSRF attacks.
-		// For development, we allow all origins.
 		return true
 	},
+}
+
+// Message defines the structure for messages sent over WebSocket.
+type Message struct {
+	Content  string `json:"content"`
+	ChatID   int64  `json:"chat_id"`
+	SenderID string `json:"sender_id"`
 }
 
 // Client is a middleman between the websocket connection and the hub.
 type Client struct {
 	hub *Hub
-
-	// The websocket connection.
 	conn *websocket.Conn
-
-	// Buffered channel of outbound messages.
 	send chan []byte
+	chatID int64
+	userID string
 }
 
-// readPump pumps messages from the websocket connection to the hub.
 func (c *Client) readPump() {
 	defer func() {
 		c.hub.unregister <- c
@@ -52,19 +48,34 @@ func (c *Client) readPump() {
 	c.conn.SetReadLimit(maxMessageSize)
 	c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	c.conn.SetPongHandler(func(string) error { c.conn.SetReadDeadline(time.Now().Add(pongWait)); return nil })
+
 	for {
-		_, message, err := c.conn.ReadMessage()
+		_, rawMessage, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				log.Printf("error: %v", err)
 			}
 			break
 		}
-		c.hub.broadcast <- message
+		
+		// Create a message struct and populate it
+		msg := Message{
+			Content:  string(rawMessage),
+			ChatID:   c.chatID,
+			SenderID: c.userID,
+		}
+		
+		// Marshal the struct to JSON to be sent to the hub
+		jsonMessage, err := json.Marshal(msg)
+		if err != nil {
+			log.Printf("error marshalling message: %v", err)
+			continue
+		}
+
+		c.hub.broadcast <- jsonMessage
 	}
 }
 
-// writePump pumps messages from the hub to the websocket connection.
 func (c *Client) writePump() {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
@@ -76,7 +87,6 @@ func (c *Client) writePump() {
 		case message, ok := <-c.send:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
-				// The hub closed the channel.
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
@@ -87,10 +97,9 @@ func (c *Client) writePump() {
 			}
 			w.Write(message)
 
-			// Add queued chat messages to the current websocket message.
 			n := len(c.send)
 			for i := 0; i < n; i++ {
-				w.Write([]byte("\n"))
+				w.Write([]byte{'\n'})
 				w.Write(<-c.send)
 			}
 
@@ -108,17 +117,12 @@ func (c *Client) writePump() {
 
 // Hub maintains the set of active clients and broadcasts messages to the clients.
 type Hub struct {
-	// Registered clients.
-	clients map[*Client]bool
-
-	// Inbound messages from the clients.
-	broadcast chan []byte
-
-	// Register requests from the clients.
-	register chan *Client
-
-	// Unregister requests from clients.
+	clients    map[*Client]bool
+	broadcast  chan []byte
+	register   chan *Client
 	unregister chan *Client
+	// Maps chatID to a set of clients in that room.
+	rooms map[int64]map[*Client]bool
 }
 
 func NewHub() *Hub {
@@ -127,6 +131,7 @@ func NewHub() *Hub {
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
 		clients:    make(map[*Client]bool),
+		rooms:      make(map[int64]map[*Client]bool),
 	}
 }
 
@@ -135,18 +140,37 @@ func (h *Hub) Run() {
 		select {
 		case client := <-h.register:
 			h.clients[client] = true
+			if h.rooms[client.chatID] == nil {
+				h.rooms[client.chatID] = make(map[*Client]bool)
+			}
+			h.rooms[client.chatID][client] = true
 		case client := <-h.unregister:
 			if _, ok := h.clients[client]; ok {
 				delete(h.clients, client)
 				close(client.send)
+				if roomClients := h.rooms[client.chatID]; roomClients != nil {
+					delete(roomClients, client)
+					if len(roomClients) == 0 {
+						delete(h.rooms, client.chatID)
+					}
+				}
 			}
-		case message := <-h.broadcast:
-			for client := range h.clients {
-				select {
-				case client.send <- message:
-				default:
-					close(client.send)
-					delete(h.clients, client)
+		case jsonMessage := <-h.broadcast:
+			var msg Message
+			if err := json.Unmarshal(jsonMessage, &msg); err != nil {
+				log.Printf("error unmarshalling broadcast message: %v", err)
+				continue
+			}
+
+			if roomClients, ok := h.rooms[msg.ChatID]; ok {
+				for client := range roomClients {
+					select {
+					case client.send <- jsonMessage:
+					default:
+						close(client.send)
+						delete(h.clients, client)
+						delete(roomClients, client)
+					}
 				}
 			}
 		}
@@ -154,16 +178,21 @@ func (h *Hub) Run() {
 }
 
 // WsHandler handles websocket requests from the peer.
-func WsHandler(hub *Hub, w http.ResponseWriter, r *http.Request) {
+func WsHandler(hub *Hub, w http.ResponseWriter, r *http.Request, chatID int64, userID string) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println(err)
 		return
 	}
-	client := &Client{hub: hub, conn: conn, send: make(chan []byte, 256)}
+	client := &Client{
+		hub:    hub,
+		conn:   conn,
+		send:   make(chan []byte, 256),
+		chatID: chatID,
+		userID: userID,
+	}
 	client.hub.register <- client
 
-	// Allow collection of memory referenced by the caller by doing all work in new goroutines.
 	go client.writePump()
 	go client.readPump()
 }
