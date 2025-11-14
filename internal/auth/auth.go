@@ -53,6 +53,28 @@ func Init() {
 func EchoJWTMiddleware() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
+			// Development mode: bypass authentication if DISABLE_AUTH is set
+			if os.Getenv("DISABLE_AUTH") == "true" {
+				log.Println("⚠️  WARNING: Authentication is DISABLED (development mode)")
+				
+				// Get user ID from X-Test-User-ID header or use default
+				testUserID := c.Request().Header.Get("X-Test-User-ID")
+				if testUserID == "" {
+					testUserID = "auth0|6917784d99703fe24aebd01d" // Default test user
+				}
+				
+				// Get email from X-Test-User-Email header or use default
+				testUserEmail := c.Request().Header.Get("X-Test-User-Email")
+				if testUserEmail == "" {
+					testUserEmail = "testuser1@example.com"
+				}
+				
+				c.Set("user_id", testUserID)
+				c.Set("user_email", testUserEmail)
+				return next(c)
+			}
+
+			// Production mode: normal JWT authentication
 			authHeader := c.Request().Header.Get("Authorization")
 			if authHeader == "" {
 				return echo.NewHTTPError(http.StatusUnauthorized, "Authorization header required")

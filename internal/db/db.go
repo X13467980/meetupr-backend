@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"meetupr-backend/internal/models"
@@ -32,8 +33,16 @@ func Init() {
 }
 
 func CreateUser(user models.User) error {
-	var results []models.User
-	err := Supabase.DB.From("users").Insert(user).Execute(&results)
+	// Only insert fields that exist in the users table
+	userData := map[string]interface{}{
+		"id":              user.ID,
+		"email":           user.Email,
+		"username":        user.Username,
+		"is_oic_verified": user.IsOICVerified,
+		"created_at":      user.CreatedAt,
+	}
+	var results []map[string]interface{}
+	err := Supabase.DB.From("users").Insert(userData).Execute(&results)
 	if err != nil {
 		return err
 	}
@@ -209,6 +218,8 @@ func GetInterests() ([]models.Interest, error) {
 
 // GetUserChats returns all chat rooms that a user is participating in
 func GetUserChats(userID string) ([]models.Chat, error) {
+	log.Printf("GetUserChats: fetching chats for user %s", userID)
+
 	// Get chats where user is user1
 	var results1 []json.RawMessage
 	err1 := Supabase.DB.From("chats").
@@ -223,19 +234,74 @@ func GetUserChats(userID string) ([]models.Chat, error) {
 		Eq("user2_id", userID).
 		Execute(&results2)
 
+	// エラーハンドリング: 空の結果セットはエラーではない
+	// Supabaseは結果が0件の場合、エラーではなく空の配列を返す
+	// ただし、実際のエラー（ネットワークエラー、認証エラーなど）は処理する必要がある
+
+	// エラーログを出力（デバッグ用）
+	if err1 != nil {
+		log.Printf("Error getting chats where user is user1 (userID=%s): %v", userID, err1)
+		// Supabaseのエラーメッセージを確認
+		if err1.Error() != "" {
+			log.Printf("Error details: %s", err1.Error())
+		}
+	}
+	if err2 != nil {
+		log.Printf("Error getting chats where user is user2 (userID=%s): %v", userID, err2)
+		// Supabaseのエラーメッセージを確認
+		if err2.Error() != "" {
+			log.Printf("Error details: %s", err2.Error())
+		}
+	}
+
+	// 両方エラーの場合の処理
+	// "unexpected end of JSON input"エラーは、空の結果セットの場合に発生する可能性がある
 	if err1 != nil && err2 != nil {
+		err1Str := err1.Error()
+		err2Str := err2.Error()
+
+		// "unexpected end of JSON input"は空の結果セットを示す可能性がある
+		// この場合は空の配列を返す
+		if containsIgnoreCase(err1Str, "unexpected end of json") &&
+			containsIgnoreCase(err2Str, "unexpected end of json") {
+			log.Printf("No chats found for user %s (empty result set)", userID)
+			return []models.Chat{}, nil
+		}
+
+		// "not found"や空の結果を示すエラーの場合も空の配列を返す
+		if (containsIgnoreCase(err1Str, "not found") || containsIgnoreCase(err1Str, "no rows")) &&
+			(containsIgnoreCase(err2Str, "not found") || containsIgnoreCase(err2Str, "no rows")) {
+			log.Printf("No chats found for user %s (both queries returned empty)", userID)
+			return []models.Chat{}, nil
+		}
+
+		// その他のエラーは実際のエラーとして返す
 		return nil, fmt.Errorf("failed to get chats: %v, %v", err1, err2)
+	}
+
+	log.Printf("GetUserChats: results1=%d, results2=%d", len(results1), len(results2))
+
+	// エラーがない場合でも、結果が空の可能性がある
+	// その場合は空の配列を返す（これは正常）
+	if err1 == nil && err2 == nil && len(results1) == 0 && len(results2) == 0 {
+		log.Printf("GetUserChats: no chats found for user %s (both queries returned empty arrays)", userID)
+		return []models.Chat{}, nil
 	}
 
 	// Merge results and deduplicate by chat ID
 	chatMap := make(map[int64]models.Chat)
 
 	// Process results1
-	if err1 == nil {
+	if err1 == nil && len(results1) > 0 {
+		log.Printf("GetUserChats: processing %d chat(s) where user is user1", len(results1))
 		for _, result := range results1 {
+			// 空のJSONをチェック
+			if len(result) == 0 || string(result) == "null" {
+				continue
+			}
 			var chat models.Chat
 			if err := json.Unmarshal(result, &chat); err != nil {
-				log.Printf("error unmarshalling chat: %v", err)
+				log.Printf("error unmarshalling chat: %v, raw: %s", err, string(result))
 				continue
 			}
 			chatMap[chat.ID] = chat
@@ -243,11 +309,16 @@ func GetUserChats(userID string) ([]models.Chat, error) {
 	}
 
 	// Process results2
-	if err2 == nil {
+	if err2 == nil && len(results2) > 0 {
+		log.Printf("GetUserChats: processing %d chat(s) where user is user2", len(results2))
 		for _, result := range results2 {
+			// 空のJSONをチェック
+			if len(result) == 0 || string(result) == "null" {
+				continue
+			}
 			var chat models.Chat
 			if err := json.Unmarshal(result, &chat); err != nil {
-				log.Printf("error unmarshalling chat: %v", err)
+				log.Printf("error unmarshalling chat: %v, raw: %s", err, string(result))
 				continue
 			}
 			chatMap[chat.ID] = chat
@@ -255,6 +326,7 @@ func GetUserChats(userID string) ([]models.Chat, error) {
 	}
 
 	// Convert map to slice and populate additional info
+	log.Printf("GetUserChats: found %d unique chat(s) for user %s", len(chatMap), userID)
 	var chats []models.Chat
 	for _, chat := range chatMap {
 		// Determine the other user ID
@@ -265,17 +337,23 @@ func GetUserChats(userID string) ([]models.Chat, error) {
 			otherUserID = chat.User1ID
 		}
 
-		// Get the other user's basic info
-		otherUser, err := GetUserProfile(otherUserID)
-		if err != nil {
-			log.Printf("error getting other user profile: %v", err)
-		} else {
-			chat.OtherUser = otherUser
+		// Get the other user's basic info (エラーが発生しても続行)
+		if otherUserID != "" {
+			otherUser, err := GetUserProfile(otherUserID)
+			if err != nil {
+				log.Printf("error getting other user profile for user %s: %v", otherUserID, err)
+				// ユーザー情報が取得できなくてもチャットは返す
+			} else {
+				chat.OtherUser = otherUser
+			}
 		}
 
 		// Get the last message (optimized: only fetch the last one)
+		// エラーが発生しても続行
 		lastMsg, err := GetLastChatMessage(chat.ID)
-		if err == nil && lastMsg != nil {
+		if err != nil {
+			log.Printf("error getting last message for chat %d: %v", chat.ID, err)
+		} else if lastMsg != nil {
 			chat.LastMessage = lastMsg
 		}
 
@@ -287,7 +365,19 @@ func GetUserChats(userID string) ([]models.Chat, error) {
 		return chats[i].CreatedAt.After(chats[j].CreatedAt)
 	})
 
+	// チャットが存在しない場合は空のスライスを返す（エラーではない）
+	if len(chats) == 0 {
+		return []models.Chat{}, nil
+	}
+
 	return chats, nil
+}
+
+// containsIgnoreCase checks if a string contains a substring (case-insensitive)
+func containsIgnoreCase(s, substr string) bool {
+	s = strings.ToLower(s)
+	substr = strings.ToLower(substr)
+	return strings.Contains(s, substr)
 }
 
 // GetLastChatMessage returns the last message in a chat room
@@ -334,16 +424,36 @@ func GetChatMessages(chatID int64) ([]models.Message, error) {
 
 // IsChatParticipant checks if a user is a participant in a chat room
 func IsChatParticipant(chatID int64, userID string) (bool, error) {
+	log.Printf("IsChatParticipant: checking if user %s is participant in chat %d", userID, chatID)
+
 	// First, get the chat
 	var results []json.RawMessage
 	err := Supabase.DB.From("chats").
 		Select("id, user1_id, user2_id").
 		Eq("id", strconv.FormatInt(chatID, 10)).
 		Execute(&results)
+
 	if err != nil {
+		errStr := err.Error()
+		log.Printf("IsChatParticipant: error querying chat %d: %v", chatID, err)
+
+		// "unexpected end of JSON input"は空の結果セットを示す可能性がある
+		if containsIgnoreCase(errStr, "unexpected end of json") {
+			log.Printf("IsChatParticipant: chat %d not found (empty result set)", chatID)
+			return false, nil
+		}
+
+		// "not found"や空の結果を示すエラーの場合もfalseを返す
+		if containsIgnoreCase(errStr, "not found") || containsIgnoreCase(errStr, "no rows") {
+			log.Printf("IsChatParticipant: chat %d not found", chatID)
+			return false, nil
+		}
+
 		return false, err
 	}
+
 	if len(results) == 0 {
+		log.Printf("IsChatParticipant: chat %d not found (no results)", chatID)
 		return false, nil
 	}
 
@@ -353,9 +463,19 @@ func IsChatParticipant(chatID int64, userID string) (bool, error) {
 		User1ID string `json:"user1_id"`
 		User2ID string `json:"user2_id"`
 	}
+
+	// Check if result is empty or null before unmarshalling
+	if len(results[0]) == 0 || string(results[0]) == "null" {
+		log.Printf("IsChatParticipant: chat %d result is empty or null", chatID)
+		return false, nil
+	}
+
 	if err := json.Unmarshal(results[0], &chat); err != nil {
+		log.Printf("IsChatParticipant: error unmarshalling chat %d: %v", chatID, err)
 		return false, err
 	}
 
-	return chat.User1ID == userID || chat.User2ID == userID, nil
+	isParticipant := chat.User1ID == userID || chat.User2ID == userID
+	log.Printf("IsChatParticipant: user %s is participant in chat %d: %v", userID, chatID, isParticipant)
+	return isParticipant, nil
 }
