@@ -42,6 +42,17 @@ func main() {
 		return c.String(http.StatusOK, "Hello, World!")
 	})
 
+	// API V1 routes
+	apiV1 := e.Group("/api/v1")
+
+	// User routes
+	userGroup := apiV1.Group("/users")
+	userGroup.POST("/register", handlers.RegisterUser, auth.EchoJWTMiddleware())
+	userGroup.GET("/me", handlers.GetMyProfile, auth.EchoJWTMiddleware())
+	userGroup.PUT("/me", handlers.UpdateMyProfile, auth.EchoJWTMiddleware())
+	userGroup.GET("", handlers.SearchUsers, auth.EchoJWTMiddleware())
+	userGroup.GET("/:userId", handlers.GetUserProfile, auth.EchoJWTMiddleware())
+
 	// WebSocket route with JWT middleware
 	e.GET("/ws/chat/:chatID", func(c echo.Context) error {
 		chatIDStr := c.Param("chatID")
