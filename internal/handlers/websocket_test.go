@@ -8,7 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"meetupr-backend/internal/db"
+
 	"github.com/gorilla/websocket"
+	"github.com/joho/godotenv"
 )
 
 // Helper function to create a test server and a client connection
@@ -33,6 +36,12 @@ func newTestClient(t *testing.T, hub *Hub, chatID int64, userID string) (*websoc
 }
 
 func TestChatRoomBroadcast(t *testing.T) {
+	// Load .env file for database connection
+	if err := godotenv.Load("../../.env"); err != nil {
+		t.Fatalf("Error loading .env file for tests: %v", err)
+	}
+	db.Init()
+
 	hub := NewHub()
 	go hub.Run()
 

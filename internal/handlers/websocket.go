@@ -109,7 +109,7 @@ func (c *Client) writePump() {
 
 			n := len(c.send)
 			for i := 0; i < n; i++ {
-				w.Write([]byte{&#39;\n&#39;})
+				w.Write([]byte{'\n'})
 				w.Write(<-c.send)
 			}
 
