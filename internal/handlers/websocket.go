@@ -1,8 +1,11 @@
 package handlers
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -30,6 +33,15 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
+// Message represents a message sent over the websocket.
+type Message struct {
+	Type    string    `json:"type"` // e.g., "text", "join", "leave"
+	ChatID  int64     `json:"chat_id"`
+	SenderID string    `json:"sender_id"`
+	Content string    `json:"content"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
 // Client is a middleman between the websocket connection and the hub.
 type Client struct {
 	hub *Hub
@@ -39,11 +51,15 @@ type Client struct {
 
 	// Buffered channel of outbound messages.
 	send chan []byte
+
+	// User ID of the client
+	userID string
+
+	// Chat ID the client is currently in
+	chatID int64
 }
 
 // readPump pumps messages from the websocket connection to the hub.
-//
-// The application runs readPump in a goroutine for each client connection. The application ensures that there is at most one reader per connection by executing all reads from this goroutine.
 func (c *Client) readPump() {
 	defer func() {
 		c.hub.unregister <- c
@@ -53,20 +69,30 @@ func (c *Client) readPump() {
 	c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	c.conn.SetPongHandler(func(string) error { c.conn.SetReadDeadline(time.Now().Add(pongWait)); return nil })
 	for {
-		_, message, err := c.conn.ReadMessage()
+		_, p, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				log.Printf("error: %v", err)
 			}
 			break
 		}
-		c.hub.broadcast <- message
+
+		var msg Message
+		if err := json.Unmarshal(p, &msg); err != nil {
+			log.Printf("error unmarshalling message: %v", err)
+			continue
+		}
+
+		// Ensure message has correct chat ID and sender ID
+		msg.ChatID = c.chatID
+		msg.SenderID = c.userID
+		msg.Timestamp = time.Now()
+
+		c.hub.broadcast <- msg // broadcast channel now takes Message struct
 	}
 }
 
 // writePump pumps messages from the hub to the websocket connection.
-//
-// A goroutine running writePump is started for each connection. The application ensures that there is at most one writer to a connection by executing all writes from this goroutine.
 func (c *Client) writePump() {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
@@ -114,22 +140,26 @@ type Hub struct {
 	clients map[*Client]bool
 
 	// Inbound messages from the clients.
-	broadcast chan []byte
+	broadcast chan Message // Changed to Message struct
 
 	// Register requests from the clients.
 	register chan *Client
 
 	// Unregister requests from clients.
 	unregister chan *Client
+
+	// Rooms map: chatID -> map of clients in that room
+	rooms map[int64]map[*Client]bool
 }
 
 // NewHub creates and returns a new Hub instance.
 func NewHub() *Hub {
 	return &Hub{
-		broadcast:  make(chan []byte),
+		broadcast:  make(chan Message), // Changed to Message struct
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
 		clients:    make(map[*Client]bool),
+		rooms:      make(map[int64]map[*Client]bool),
 	}
 }
 
@@ -139,18 +169,45 @@ func (h *Hub) Run() {
 		select {
 		case client := <-h.register:
 			h.clients[client] = true
+			if _, ok := h.rooms[client.chatID]; !ok {
+				h.rooms[client.chatID] = make(map[*Client]bool)
+			}
+			h.rooms[client.chatID][client] = true
+			log.Printf("Client %s joined chat %d", client.userID, client.chatID)
+
 		case client := <-h.unregister:
 			if _, ok := h.clients[client]; ok {
 				delete(h.clients, client)
 				close(client.send)
+				if roomClients, ok := h.rooms[client.chatID]; ok {
+					delete(roomClients, client)
+					if len(roomClients) == 0 {
+						delete(h.rooms, client.chatID) // Remove room if empty
+					}
+				}
+				log.Printf("Client %s left chat %d", client.userID, client.chatID)
 			}
+
 		case message := <-h.broadcast:
-			for client := range h.clients {
-				select {
-				case client.send <- message:
-				default:
-					close(client.send)
-					delete(h.clients, client)
+			// Marshal message back to JSON for sending
+			jsonMessage, err := json.Marshal(message)
+			if err != nil {
+				log.Printf("error marshalling message: %v", err)
+				continue
+			}
+
+			if roomClients, ok := h.rooms[message.ChatID]; ok {
+				for client := range roomClients {
+					select {
+					case client.send <- jsonMessage:
+					default:
+						close(client.send)
+						delete(h.clients, client)
+						delete(roomClients, client)
+						if len(roomClients) == 0 {
+							delete(h.rooms, message.ChatID)
+						}
+					}
 				}
 			}
 		}
@@ -158,17 +215,16 @@ func (h *Hub) Run() {
 }
 
 // WsHandler handles WebSocket connections.
-func WsHandler(hub *Hub, w http.ResponseWriter, r *http.Request) {
+// It now expects chatID and userID to be extracted from the request context or path.
+func WsHandler(hub *Hub, chatID int64, userID string, w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("Failed to upgrade connection: %v", err)
 		return
 	}
-	client := &Client{hub: hub, conn: conn, send: make(chan []byte, 256)}
+	client := &Client{hub: hub, conn: conn, send: make(chan []byte, 256), userID: userID, chatID: chatID}
 	client.hub.register <- client
 
-	// Allow collection of memory referenced by the caller by doing all work in new goroutines.
 	go client.writePump()
 	go client.readPump()
 }
-
