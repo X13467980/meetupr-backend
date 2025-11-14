@@ -3,7 +3,9 @@ package main
 import (
 	"log"
 	"net/http"
+	"os"
 	"strconv"
+	"strings"
 
 	"meetupr-backend/internal/auth"
 	"meetupr-backend/internal/db"
@@ -36,6 +38,26 @@ func main() {
 	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
 
+	// CORS middleware
+	// 環境変数 CORS_ALLOW_ORIGINS から許可するオリジンを取得（カンマ区切り）
+	// 未設定の場合は "*" を許可（開発環境用）
+	corsAllowOrigins := os.Getenv("CORS_ALLOW_ORIGINS")
+	var allowOrigins []string
+	if corsAllowOrigins == "" {
+		allowOrigins = []string{"*"}
+		log.Println("CORS: Allowing all origins (development mode)")
+	} else {
+		allowOrigins = strings.Split(corsAllowOrigins, ",")
+		log.Printf("CORS: Allowing origins: %v", allowOrigins)
+	}
+
+	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOrigins:     allowOrigins,
+		AllowMethods:     []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions},
+		AllowHeaders:     []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization},
+		AllowCredentials: true,
+	}))
+
 	// Initialize and run the ChatHub
 	hub := handlers.NewHub()
 	go hub.Run()
@@ -67,6 +89,11 @@ func main() {
 	// Interests routes
 	interestGroup := apiV1.Group("/interests")
 	interestGroup.GET("", handlers.GetInterests, auth.EchoJWTMiddleware())
+
+	// Chat routes
+	chatGroup := apiV1.Group("/chats")
+	chatGroup.GET("", handlers.GetChats, auth.EchoJWTMiddleware())
+	chatGroup.GET("/:chatId/messages", handlers.GetChatMessages, auth.EchoJWTMiddleware())
 
 	// WebSocket route with JWT middleware
 	e.GET("/ws/chat/:chatID", func(c echo.Context) error {
