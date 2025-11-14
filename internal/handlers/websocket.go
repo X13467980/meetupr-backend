@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"time"
 
+	"meetupr-backend/internal/db"
+
 	"github.com/gorilla/websocket"
 )
 
@@ -33,9 +35,9 @@ type Message struct {
 
 // Client is a middleman between the websocket connection and the hub.
 type Client struct {
-	hub *Hub
-	conn *websocket.Conn
-	send chan []byte
+	hub    *Hub
+	conn   *websocket.Conn
+	send   chan []byte
 	chatID int64
 	userID string
 }
@@ -50,6 +52,7 @@ func (c *Client) readPump() {
 	c.conn.SetPongHandler(func(string) error { c.conn.SetReadDeadline(time.Now().Add(pongWait)); return nil })
 
 	for {
+		// Read message from browser
 		_, rawMessage, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
@@ -57,14 +60,21 @@ func (c *Client) readPump() {
 			}
 			break
 		}
-		
+
+		// Unmarshal the raw message to extract content
+		var msgData map[string]string
+		if err := json.Unmarshal(rawMessage, &msgData); err != nil {
+			log.Printf("error unmarshalling raw message: %v", err)
+			continue
+		}
+
 		// Create a message struct and populate it
 		msg := Message{
-			Content:  string(rawMessage),
+			Content:  msgData["content"],
 			ChatID:   c.chatID,
 			SenderID: c.userID,
 		}
-		
+
 		// Marshal the struct to JSON to be sent to the hub
 		jsonMessage, err := json.Marshal(msg)
 		if err != nil {
@@ -99,7 +109,7 @@ func (c *Client) writePump() {
 
 			n := len(c.send)
 			for i := 0; i < n; i++ {
-				w.Write([]byte{'\n'})
+				w.Write([]byte{&#39;\n&#39;})
 				w.Write(<-c.send)
 			}
 
@@ -162,6 +172,12 @@ func (h *Hub) Run() {
 				continue
 			}
 
+			// Save message to the database
+			if err := saveMessage(&msg); err != nil {
+				log.Printf("error saving message to db: %v", err)
+				continue
+			}
+
 			if roomClients, ok := h.rooms[msg.ChatID]; ok {
 				for client := range roomClients {
 					select {
@@ -193,6 +209,45 @@ func WsHandler(hub *Hub, w http.ResponseWriter, r *http.Request, chatID int64, u
 	}
 	client.hub.register <- client
 
+	// Load and send message history
+	go loadMessageHistory(client)
+
 	go client.writePump()
 	go client.readPump()
+}
+
+func saveMessage(m *Message) error {
+	query := `INSERT INTO messages (chat_id, sender_id, content, message_type) VALUES ($1, $2, $3, $4)`
+	_, err := db.DB.Exec(query, m.ChatID, m.SenderID, m.Content, "text") // Assuming message_type is always "text" for now
+	return err
+}
+
+func loadMessageHistory(c *Client) {
+	query := `SELECT content, sender_id FROM messages WHERE chat_id = $1 ORDER BY sent_at ASC`
+
+rows, err := db.DB.Query(query, c.chatID)
+	if err != nil {
+		log.Printf("error loading message history: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var content, senderID string
+		if err := rows.Scan(&content, &senderID); err != nil {
+			log.Printf("error scanning message row: %v", err)
+			continue
+		}
+		msg := Message{
+			Content:  content,
+			ChatID:   c.chatID,
+			SenderID: senderID,
+		}
+		jsonMessage, err := json.Marshal(msg)
+		if err != nil {
+			log.Printf("error marshalling history message: %v", err)
+			continue
+		}
+		c.send <- jsonMessage
+	}
 }

@@ -169,23 +169,20 @@ APIリクエストには、Auth0から発行されたJWT（JSON Web Token）を`
 
 -   **説明:** WebSocketを使用してリアルタイムなメッセージ送受信を行います。
 -   **認証:** 必要 (接続時にJWTを渡す)
--   **送信メッセージ:**
+-   **送信メッセージ (Client -> Server):**
+    クライアントはメッセージの内容をJSONで送信します。
     ```json
     {
-      "type": "text",
       "content": "こんにちは！"
     }
     ```
--   **受信メッセージ:**
+-   **受信メッセージ (Server -> Client):**
+    サーバーは以下のJSONフォーマットでメッセージをブロードキャストします。
     ```json
     {
-      "id": 1,
-      "chat_id": 123,
-      "sender_id": "auth0|xxxxxxxxxx",
       "content": "こんにちは！",
-      "translated_content": "Hello!",
-      "message_type": "text",
-      "sent_at": "2025-11-14T12:00:00Z"
+      "chat_id": 123,
+      "sender_id": "auth0|xxxxxxxxxx"
     }
     ```
 

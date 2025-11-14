@@ -9,17 +9,22 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"meetupr-backend/internal/auth"
+	"meetupr-backend/internal/db"
 	"meetupr-backend/internal/handlers"
 )
 
 func main() {
-	// Load .env file
-	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found")
+	// Load environment variables from .env file
+	err := godotenv.Load()
+	if err != nil {
+		log.Println("Error loading .env file, proceeding with environment variables")
 	}
 
 	// Initialize the authentication service
 	auth.Init()
+
+	// Initialize the database connection
+	db.Init()
 
 	// Initialize Echo
 	e := echo.New()
