@@ -1,33 +1,66 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/joho/godotenv"
+	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 	"meetupr-backend/internal/auth"
+	"meetupr-backend/internal/db"
 	"meetupr-backend/internal/handlers"
 )
 
 func main() {
-	// Load .env file
-	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found")
+	// Load environment variables from .env file
+	err := godotenv.Load()
+	if err != nil {
+		log.Println("Error loading .env file, proceeding with environment variables")
 	}
 
 	// Initialize the authentication service
 	auth.Init()
 
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "Hello, World!")
+	// Initialize the database connection
+	db.Init()
+
+	// Initialize Echo
+	e := echo.New()
+
+	// Middleware
+	e.Use(middleware.Logger())
+	e.Use(middleware.Recover())
+
+	// Initialize and run the ChatHub
+	hub := handlers.NewHub()
+	go hub.Run()
+
+	// Public routes
+	e.GET("/", func(c echo.Context) error {
+		return c.String(http.StatusOK, "Hello, World!")
 	})
 
-	// Protect the /ws endpoint with the JWT middleware
-	http.Handle("/ws", auth.JWTMiddleware(http.HandlerFunc(handlers.WsHandler)))
+	// WebSocket route with JWT middleware
+	e.GET("/ws/chat/:chatID", func(c echo.Context) error {
+		chatIDStr := c.Param("chatID")
+		chatID, err := strconv.ParseInt(chatIDStr, 10, 64)
+		if err != nil {
+			return c.String(http.StatusBadRequest, "Invalid chat ID")
+		}
+
+		userID, ok := c.Get("user_id").(string)
+		if !ok || userID == "" {
+			return c.String(http.StatusUnauthorized, "User ID not found in token")
+		}
+
+		handlers.WsHandler(hub, c.Response(), c.Request(), chatID, userID)
+		return nil
+	}, auth.EchoJWTMiddleware())
 
 	log.Println("Server starting on port 8080...")
-	if err := http.ListenAndServe(":8080", nil); err != nil {
+	if err := e.Start(":8080"); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
 }
