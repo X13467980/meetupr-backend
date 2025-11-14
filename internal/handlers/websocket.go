@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"strconv"
 	"time"
 
 	"meetupr-backend/internal/db"
@@ -178,17 +177,23 @@ func (h *Hub) Run() {
 				log.Printf("error saving message to db: %v", err)
 				continue
 			}
+			log.Printf("Message saved to DB: chat_id=%d, sender_id=%s, content=%s", msg.ChatID, msg.SenderID, msg.Content)
 
 			if roomClients, ok := h.rooms[msg.ChatID]; ok {
+				log.Printf("Broadcasting message to %d client(s) in chat %d", len(roomClients), msg.ChatID)
 				for client := range roomClients {
 					select {
 					case client.send <- jsonMessage:
+						log.Printf("Message sent to client: chat_id=%d, user_id=%s", client.chatID, client.userID)
 					default:
+						log.Printf("Client send channel full, removing client: user_id=%s", client.userID)
 						close(client.send)
 						delete(h.clients, client)
 						delete(roomClients, client)
 					}
 				}
+			} else {
+				log.Printf("No clients found in chat room %d", msg.ChatID)
 			}
 		}
 	}
@@ -232,19 +237,31 @@ func saveMessage(m *Message) error {
 }
 
 func loadMessageHistory(c *Client) {
-	var messages []Message
-	err := db.Supabase.DB.From("messages").Select("content, sender_id").Eq("chat_id", strconv.FormatInt(c.chatID, 10)).Execute(&messages)
+	// Use db.GetChatMessages to get message history
+	messages, err := db.GetChatMessages(c.chatID)
 	if err != nil {
 		log.Printf("error loading message history from Supabase: %v", err)
 		return
 	}
 
-	for _, msg := range messages {
+	log.Printf("Loaded %d message(s) from history for chat %d", len(messages), c.chatID)
+
+	for _, dbMsg := range messages {
+		// Convert models.Message to handlers.Message format
+		msg := Message{
+			Content:  dbMsg.Content,
+			ChatID:   dbMsg.ChatID,
+			SenderID: dbMsg.SenderID,
+		}
 		jsonMessage, err := json.Marshal(msg)
 		if err != nil {
 			log.Printf("error marshalling history message: %v", err)
 			continue
 		}
-		c.send <- jsonMessage
+		select {
+		case c.send <- jsonMessage:
+		default:
+			log.Printf("client send channel full, skipping history message")
+		}
 	}
 }
