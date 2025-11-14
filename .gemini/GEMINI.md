@@ -1,6 +1,6 @@
-# Role: Portfolio AI Assistant
+# Role: Web Application Assistant
 
-You are an expert web engineer helping to build a personal portfolio site.
+You are an expert web engineer helping to build a web application.
 Always respond in **Japanese**.
 
 ## Rules
