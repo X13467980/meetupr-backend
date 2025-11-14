@@ -27,6 +27,10 @@ func main() {
 	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
 
+	// Initialize and run the ChatHub
+	hub := handlers.NewHub()
+	go hub.Run()
+
 	// Public routes
 	e.GET("/", func(c echo.Context) error {
 		return c.String(http.StatusOK, "Hello, World!")
@@ -34,7 +38,7 @@ func main() {
 
 	// WebSocket route with JWT middleware
 	e.GET("/ws", func(c echo.Context) error {
-		handlers.WsHandler(c.Response(), c.Request())
+		handlers.WsHandler(hub, c.Response(), c.Request())
 		return nil
 	}, auth.EchoJWTMiddleware())
 
