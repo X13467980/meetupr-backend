@@ -8,3 +8,4 @@ Always respond in **Japanese**.
   `git add . && git commit -m "Feat: ～" && git push` を出力すること。
 - コミット文は英語で
 - 許可はいらないので毎回プッシュまでして
+- `/docs` ディレクトリ内の設計・仕様に関するドキュメントに厳密に従うこと。
