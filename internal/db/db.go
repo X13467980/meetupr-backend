@@ -8,8 +8,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/nedpals/supabase-go"
 	"meetupr-backend/internal/models"
+
+	"github.com/nedpals/supabase-go"
 )
 
 var Supabase *supabase.Client
@@ -70,17 +71,17 @@ func GetUserByID(userID string) (*models.UserProfileResponse, error) {
 	}
 
 	profileResponse := &models.UserProfileResponse{
-		UserID:          user.ID,
-		Email:           user.Email,
-		Username:        user.Username,
-		Major:           user.Major,
-		Gender:          user.Gender,
-		NativeLanguage:  user.NativeLanguage,
-		SpokenLanguages: user.SpokenLanguages,
+		UserID:            user.ID,
+		Email:             user.Email,
+		Username:          user.Username,
+		Major:             user.Major,
+		Gender:            user.Gender,
+		NativeLanguage:    user.NativeLanguage,
+		SpokenLanguages:   user.SpokenLanguages,
 		LearningLanguages: user.LearningLanguages,
-		Residence:       user.Residence,
-		Comment:         user.Comment,
-		LastUpdated:     user.LastUpdatedAt,
+		Residence:         user.Residence,
+		Comment:           user.Comment,
+		LastUpdated:       user.LastUpdatedAt,
 	}
 
 	// Populate interests
@@ -98,14 +99,14 @@ func GetUserByID(userID string) (*models.UserProfileResponse, error) {
 func UpdateUserProfile(userID string, req models.UpdateUserProfileRequest) (*models.UserProfileResponse, error) {
 	// Update profiles table
 	profileUpdate := map[string]interface{}{
-		"major":             req.Major,
-		"gender":            req.Gender,
-		"native_language":   req.NativeLanguage,
-		"spoken_languages":  req.SpokenLanguages,
+		"major":              req.Major,
+		"gender":             req.Gender,
+		"native_language":    req.NativeLanguage,
+		"spoken_languages":   req.SpokenLanguages,
 		"learning_languages": req.LearningLanguages,
-		"residence":         req.Residence,
-		"comment":           req.Comment,
-		"last_updated":      time.Now(),
+		"residence":          req.Residence,
+		"comment":            req.Comment,
+		"last_updated":       time.Now(),
 	}
 
 	var profileResults []map[string]interface{}
@@ -135,8 +136,8 @@ func UpdateUserProfile(userID string, req models.UpdateUserProfileRequest) (*mod
 	var userInterests []map[string]interface{}
 	for _, interestID := range req.InterestIDs {
 		userInterests = append(userInterests, map[string]interface{}{
-			"user_id":    userID,
-			"interest_id": interestID,
+			"user_id":          userID,
+			"interest_id":      interestID,
 			"preference_level": 3, // Default preference level
 		})
 	}
@@ -193,4 +194,43 @@ func GetUserProfile(userID string) (*models.User, error) {
 	}
 
 	return &user, nil
+}
+
+// GetChats: 指定されたユーザーが参加しているチャットルーム一覧を取得します。
+func GetChats(userID string) ([]models.ChatResponse, error) {
+	var chats []models.ChatResponse
+	// user1_id または user2_id が userID と一致するチャットを取得
+	err := Supabase.DB.From("chats").
+		Select("*").
+		Filter("user1_id", "eq", userID).
+		Execute(&chats)
+	if err != nil {
+		return nil, err
+	}
+
+	var chats2 []models.ChatResponse
+	err = Supabase.DB.From("chats").
+		Select("*").
+		Filter("user2_id", "eq", userID).
+		Execute(&chats2)
+	if err != nil {
+		return nil, err
+	}
+
+	// 両方の結果をマージ（重複排除は後処理）
+	chats = append(chats, chats2...)
+	return chats, nil
+}
+
+// GetChatMessages: 指定されたチャットルームのメッセージ履歴を取得します。
+func GetChatMessages(chatID int64) ([]models.Message, error) {
+	var messages []models.Message
+	err := Supabase.DB.From("messages").
+		Select("*").
+		Filter("chat_id", "eq", strconv.FormatInt(chatID, 10)).
+		Execute(&messages)
+	if err != nil {
+		return nil, err
+	}
+	return messages, nil
 }
