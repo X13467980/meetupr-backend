@@ -11,6 +11,8 @@ import (
 	"meetupr-backend/internal/auth"
 	"meetupr-backend/internal/db"
 	"meetupr-backend/internal/handlers"
+
+	echoSwagger "github.com/swaggo/echo-swagger"
 )
 
 func main() {
@@ -41,6 +43,14 @@ func main() {
 	e.GET("/", func(c echo.Context) error {
 		return c.String(http.StatusOK, "Hello, World!")
 	})
+
+	// Serve swagger.yaml
+	e.GET("/swagger.yaml", func(c echo.Context) error {
+		return c.File("docs/swagger.yaml")
+	})
+
+	// Swagger UI route
+	e.GET("/swagger/*", echoSwagger.EchoWrapHandler(echoSwagger.URL("/swagger.yaml")))
 
 	// API V1 routes
 	apiV1 := e.Group("/api/v1")
