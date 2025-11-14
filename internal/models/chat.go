@@ -10,8 +10,8 @@ type Chat struct {
 	AISuggestedTheme string    `json:"ai_suggested_theme,omitempty"`
 	CreatedAt        time.Time `json:"created_at"`
 	// Additional fields for response
-	OtherUser        *User     `json:"other_user,omitempty"`
-	LastMessage      *Message  `json:"last_message,omitempty"`
+	OtherUser   *User    `json:"other_user,omitempty"`
+	LastMessage *Message `json:"last_message,omitempty"`
 }
 
 // Message represents a message in a chat
@@ -24,4 +24,3 @@ type Message struct {
 	MessageType       string    `json:"message_type"`
 	SentAt            time.Time `json:"sent_at"`
 }
-
