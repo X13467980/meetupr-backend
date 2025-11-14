@@ -145,7 +145,7 @@ OIC内で、言語や趣味を軸にした“リアルなつながり”をサ�
 | **フロントエンド** | Vue.js (Nuxt.js), TypeScript |
 | **バックエンド**   | Go                           |
 | **DB**         | Supabase                     |
-| **認証**       | Supabase Auth or Auth0       |
+| **認証**       | Auth0                        |
 | **デプロイ**     | フロント：Vercel / バック：Render |
 | **環境**       | Docker, PWA対応予定          |
 
