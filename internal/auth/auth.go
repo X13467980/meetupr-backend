@@ -13,13 +13,24 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-var jwks *keyfunc.JWKS
+var (
+	jwks     *keyfunc.JWKS
+	audience string
+	issuer   string
+)
 
 func Init() {
-	jwksURL := os.Getenv("AUTH0_JWKS_URL")
-	if jwksURL == "" {
-		log.Fatal("AUTH0_JWKS_URL environment variable not set")
+	auth0Domain := os.Getenv("AUTH0_DOMAIN")
+	if auth0Domain == "" {
+		log.Fatal("AUTH0_DOMAIN environment variable not set")
 	}
+	audience = os.Getenv("AUTH0_AUDIENCE")
+	if audience == "" {
+		log.Fatal("AUTH0_AUDIENCE environment variable not set")
+	}
+
+	issuer = "https://" + auth0Domain + "/"
+	jwksURL := "https://" + auth0Domain + "/.well-known/jwks.json"
 
 	var err error
 	options := keyfunc.Options{
@@ -38,35 +49,6 @@ func Init() {
 	}
 }
 
-func JWTMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" {
-			http.Error(w, "Authorization header required", http.StatusUnauthorized)
-			return
-		}
-
-		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
-		if tokenString == authHeader {
-			http.Error(w, "Could not find bearer token in Authorization header", http.StatusUnauthorized)
-			return
-		}
-
-		token, err := jwt.Parse(tokenString, jwks.Keyfunc)
-		if err != nil {
-			http.Error(w, "Failed to parse token", http.StatusUnauthorized)
-			return
-		}
-
-		if !token.Valid {
-			http.Error(w, "Invalid token", http.StatusUnauthorized)
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	})
-}
-
 // EchoJWTMiddleware creates an Echo middleware for JWT authentication.
 func EchoJWTMiddleware() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -81,26 +63,37 @@ func EchoJWTMiddleware() echo.MiddlewareFunc {
 				return echo.NewHTTPError(http.StatusUnauthorized, "Could not find bearer token in Authorization header")
 			}
 
-			token, err := jwt.Parse(tokenString, jwks.Keyfunc)
+			// Define custom claims to extract email
+			claims := jwt.MapClaims{}
+
+			// Parse and validate the token
+			token, err := jwt.ParseWithClaims(tokenString, claims, jwks.Keyfunc, jwt.WithAudience(audience), jwt.WithIssuer(issuer))
 			if err != nil {
-				return echo.NewHTTPError(http.StatusUnauthorized, "Failed to parse token: "+err.Error())
+				return echo.NewHTTPError(http.StatusUnauthorized, "Failed to parse or validate token: "+err.Error())
 			}
 
 			if !token.Valid {
 				return echo.NewHTTPError(http.StatusUnauthorized, "Invalid token")
 			}
 
-			claims, ok := token.Claims.(jwt.MapClaims)
-			if !ok {
-				return echo.NewHTTPError(http.StatusUnauthorized, "Invalid token claims")
-			}
-
+			// --- Set user info into context ---
 			userID, ok := claims["sub"].(string)
 			if !ok || userID == "" {
-				return echo.NewHTTPError(http.StatusUnauthorized, "User ID not found in token claims")
+				return echo.NewHTTPError(http.StatusUnauthorized, "User ID (sub) not found in token claims")
 			}
-
 			c.Set("user_id", userID)
+
+			// Extract email (assuming it's in a custom claim, adjust if necessary)
+			// The claim name depends on your Auth0 configuration (Rules or Actions)
+			// It might be "email", "https://example.com/email", etc.
+			userEmail, ok := claims["https://meetupr.com/email"].(string)
+			if !ok {
+				// Fallback for the standard email claim, which might not be present
+				// depending on the OIDC configuration and requested scopes.
+				userEmail, _ = claims["email"].(string)
+			}
+			c.Set("user_email", userEmail)
+
 
 			return next(c)
 		}
