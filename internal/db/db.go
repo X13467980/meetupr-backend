@@ -116,7 +116,7 @@ func UpdateUserProfile(userID string, req models.UpdateUserProfileRequest) (*mod
 		"learning_languages": req.LearningLanguages,
 		"residence":          req.Residence,
 		"comment":            req.Comment,
-		"profile_image_url":  req.ProfileImageURL,
+		"avatar_url":         req.AvatarURL,
 		"last_updated":       time.Now(),
 	}
 
@@ -425,12 +425,12 @@ func GetChatMessages(chatID int64) ([]models.Message, error) {
 
 // SearchUserResult represents a single user in search results
 type SearchUserResult struct {
-	UserID          string         `json:"user_id"`
-	Username        string         `json:"username"`
-	Comment         string         `json:"comment"`
-	Residence       string         `json:"residence"`
-	ProfileImageURL string         `json:"profile_image_url"`
-	Interests       []InterestItem `json:"interests"`
+	UserID    string         `json:"user_id"`
+	Username  string         `json:"username"`
+	Comment   string         `json:"comment"`
+	Residence string         `json:"residence"`
+	AvatarURL string         `json:"avatar_url"`
+	Interests []InterestItem `json:"interests"`
 }
 
 // InterestItem represents an interest/hobby item
@@ -448,7 +448,7 @@ func SearchUsersAdvanced(currentUserID string, keyword string, languages []strin
 	// ユーザー情報とプロフィールを結合して取得
 	var results []json.RawMessage
 	err := Supabase.DB.From("users").
-		Select("id, username, profiles(comment, residence, profile_image_url, native_language, spoken_languages, learning_languages), user_interests(interests(id, name))").
+		Select("id, username, profiles(comment, residence, avatar_url, native_language, spoken_languages, learning_languages), user_interests(interests(id, name))").
 		Neq("id", currentUserID).
 		Execute(&results)
 	if err != nil {
@@ -468,7 +468,7 @@ func SearchUsersAdvanced(currentUserID string, keyword string, languages []strin
 			Profiles *struct {
 				Comment           string   `json:"comment"`
 				Residence         string   `json:"residence"`
-				ProfileImageURL   string   `json:"profile_image_url"`
+				AvatarURL         string   `json:"avatar_url"`
 				NativeLanguage    string   `json:"native_language"`
 				SpokenLanguages   []string `json:"spoken_languages"`
 				LearningLanguages []string `json:"learning_languages"`
@@ -549,7 +549,7 @@ func SearchUsersAdvanced(currentUserID string, keyword string, languages []strin
 		if userData.Profiles != nil {
 			result.Comment = userData.Profiles.Comment
 			result.Residence = userData.Profiles.Residence
-			result.ProfileImageURL = userData.Profiles.ProfileImageURL
+			result.AvatarURL = userData.Profiles.AvatarURL
 		}
 
 		// 趣味を追加

@@ -15,7 +15,7 @@ type User struct {
 	LearningLanguages []string   `json:"learning_languages,omitempty"`
 	Residence         string     `json:"residence,omitempty"`
 	Comment           string     `json:"comment,omitempty"`
-	ProfileImageURL   string     `json:"profile_image_url,omitempty"`
+	AvatarURL         string     `json:"avatar_url,omitempty"`
 	Interests         []Interest `json:"interests,omitempty"`
 	LastUpdatedAt     time.Time  `json:"last_updated,omitempty"`
 }
@@ -38,7 +38,7 @@ type UserProfileResponse struct {
 	LearningLanguages []string   `json:"learning_languages"`
 	Residence         string     `json:"residence"`
 	Comment           string     `json:"comment"`
-	ProfileImageURL   string     `json:"profile_image_url"`
+	AvatarURL         string     `json:"avatar_url"`
 	Interests         []Interest `json:"interests"`
 	LastUpdated       time.Time  `json:"last_updated"`
 }
@@ -56,6 +56,6 @@ type UpdateUserProfileRequest struct {
 	LearningLanguages []string `json:"learning_languages"`
 	Residence         string   `json:"residence"`
 	Comment           string   `json:"comment"`
-	ProfileImageURL   string   `json:"profile_image_url"`
+	AvatarURL         string   `json:"avatar_url"`
 	InterestIDs       []int    `json:"interest_ids"`
 }
