@@ -95,6 +95,11 @@ func main() {
 	chatGroup.GET("", handlers.GetChats, auth.EchoJWTMiddleware())
 	chatGroup.GET("/:chatId/messages", handlers.GetChatMessages, auth.EchoJWTMiddleware())
 
+	// Search routes
+	searchGroup := apiV1.Group("/search")
+	searchGroup.GET("/users", handlers.SearchUsersWithQuery, auth.EchoJWTMiddleware())
+	searchGroup.POST("/users", handlers.SearchUsersAdvanced, auth.EchoJWTMiddleware())
+
 	// WebSocket route with JWT middleware
 	e.GET("/ws/chat/:chatID", func(c echo.Context) error {
 		chatIDStr := c.Param("chatID")

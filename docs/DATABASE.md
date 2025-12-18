@@ -74,6 +74,7 @@ CREATE TABLE profiles (
 | spoken_languages    | text[]        | 話せる言語の配列。                         |
 | learning_languages  | text[]        | 学習中の言語の配列。                       |
 | residence            | text          | 居住地。                                   |
+| hobbies
 | comment              | text          | 自己紹介などのコメント。                   |
 | last_updated        | timestamptz   | 最終更新日時。                             |
 

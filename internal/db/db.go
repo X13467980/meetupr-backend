@@ -116,6 +116,7 @@ func UpdateUserProfile(userID string, req models.UpdateUserProfileRequest) (*mod
 		"learning_languages": req.LearningLanguages,
 		"residence":          req.Residence,
 		"comment":            req.Comment,
+		"avatar_url":         req.AvatarURL,
 		"last_updated":       time.Now(),
 	}
 
@@ -420,6 +421,156 @@ func GetChatMessages(chatID int64) ([]models.Message, error) {
 	})
 
 	return messages, nil
+}
+
+// SearchUserResult represents a single user in search results
+type SearchUserResult struct {
+	UserID    string         `json:"user_id"`
+	Username  string         `json:"username"`
+	Comment   string         `json:"comment"`
+	Residence string         `json:"residence"`
+	AvatarURL string         `json:"avatar_url"`
+	Interests []InterestItem `json:"interests"`
+}
+
+// InterestItem represents an interest/hobby item
+type InterestItem struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+// SearchUsersAdvanced searches for users with keyword, language, and country filters
+// Excludes the current user from results
+func SearchUsersAdvanced(currentUserID string, keyword string, languages []string, countries []string) ([]SearchUserResult, error) {
+	log.Printf("SearchUsersAdvanced: currentUserID=%s, keyword=%s, languages=%v, countries=%v",
+		currentUserID, keyword, languages, countries)
+
+	// ユーザー情報とプロフィールを結合して取得
+	var results []json.RawMessage
+	err := Supabase.DB.From("users").
+		Select("id, username, profiles(comment, residence, avatar_url, native_language, spoken_languages, learning_languages), user_interests(interests(id, name))").
+		Neq("id", currentUserID).
+		Execute(&results)
+	if err != nil {
+		log.Printf("SearchUsersAdvanced: error executing query: %v", err)
+		return nil, err
+	}
+
+	log.Printf("SearchUsersAdvanced: found %d raw results", len(results))
+
+	// 結果をパースしてフィルタリング
+	var searchResults []SearchUserResult
+
+	for _, raw := range results {
+		var userData struct {
+			ID       string `json:"id"`
+			Username string `json:"username"`
+			Profiles *struct {
+				Comment           string   `json:"comment"`
+				Residence         string   `json:"residence"`
+				AvatarURL         string   `json:"avatar_url"`
+				NativeLanguage    string   `json:"native_language"`
+				SpokenLanguages   []string `json:"spoken_languages"`
+				LearningLanguages []string `json:"learning_languages"`
+			} `json:"profiles"`
+			UserInterests []struct {
+				Interests struct {
+					ID   int    `json:"id"`
+					Name string `json:"name"`
+				} `json:"interests"`
+			} `json:"user_interests"`
+		}
+
+		if err := json.Unmarshal(raw, &userData); err != nil {
+			log.Printf("SearchUsersAdvanced: error unmarshalling user: %v", err)
+			continue
+		}
+
+		// キーワードフィルタ（ユーザー名で部分一致）
+		if keyword != "" {
+			if !containsIgnoreCase(userData.Username, keyword) {
+				continue
+			}
+		}
+
+		// 言語フィルタ
+		if len(languages) > 0 && userData.Profiles != nil {
+			matched := false
+			for _, lang := range languages {
+				// native_language, spoken_languages, learning_languages のいずれかに一致
+				if containsIgnoreCase(userData.Profiles.NativeLanguage, lang) {
+					matched = true
+					break
+				}
+				for _, spoken := range userData.Profiles.SpokenLanguages {
+					if containsIgnoreCase(spoken, lang) {
+						matched = true
+						break
+					}
+				}
+				if matched {
+					break
+				}
+				for _, learning := range userData.Profiles.LearningLanguages {
+					if containsIgnoreCase(learning, lang) {
+						matched = true
+						break
+					}
+				}
+				if matched {
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+
+		// 国フィルタ（residence）
+		if len(countries) > 0 && userData.Profiles != nil {
+			matched := false
+			for _, country := range countries {
+				if containsIgnoreCase(userData.Profiles.Residence, country) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+
+		// 結果を構築
+		result := SearchUserResult{
+			UserID:   userData.ID,
+			Username: userData.Username,
+		}
+
+		if userData.Profiles != nil {
+			result.Comment = userData.Profiles.Comment
+			result.Residence = userData.Profiles.Residence
+			result.AvatarURL = userData.Profiles.AvatarURL
+		}
+
+		// 趣味を追加
+		for _, ui := range userData.UserInterests {
+			result.Interests = append(result.Interests, InterestItem{
+				ID:   ui.Interests.ID,
+				Name: ui.Interests.Name,
+			})
+		}
+
+		searchResults = append(searchResults, result)
+	}
+
+	log.Printf("SearchUsersAdvanced: returning %d filtered results", len(searchResults))
+
+	// 結果が nil の場合は空の配列を返す
+	if searchResults == nil {
+		return []SearchUserResult{}, nil
+	}
+
+	return searchResults, nil
 }
 
 // IsChatParticipant checks if a user is a participant in a chat room
