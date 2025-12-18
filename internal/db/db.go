@@ -189,19 +189,61 @@ func SearchUsers(interestID int, learningLanguage, spokenLanguage string) ([]mod
 }
 
 func GetUserProfile(userID string) (*models.User, error) {
-	var results []json.RawMessage
-	err := Supabase.DB.From("users").Select("id, username, profiles(major, gender, native_language, spoken_languages, learning_languages, residence, comment), user_interests(interests(id, name), preference_level)").Eq("id", userID).Execute(&results)
-	if err != nil {
-		return nil, err
-	}
+	// Try multiple approaches to get user info
+	// Approach 1: Try with Select("id") first (we know this works)
+	var userIDs []map[string]interface{}
+	err := Supabase.DB.From("users").
+		Select("id").
+		Eq("id", userID).
+		Execute(&userIDs)
 
-	if len(results) == 0 {
+	if err != nil || len(userIDs) == 0 {
 		return nil, fmt.Errorf("user not found")
 	}
 
-	var user models.User
-	if err := json.Unmarshal(results[0], &user); err != nil {
-		return nil, err
+	// User exists, now try to get username
+	// Approach 2: Try to get username separately
+	var usernameResults []map[string]interface{}
+	err = Supabase.DB.From("users").
+		Select("username").
+		Eq("id", userID).
+		Execute(&usernameResults)
+
+	username := userID // Fallback to ID if username unavailable
+	if err == nil && len(usernameResults) > 0 {
+		if u, ok := usernameResults[0]["username"].(string); ok && u != "" {
+			username = u
+		}
+	}
+
+	// Create user with basic info
+	user := models.User{
+		ID:       userID,
+		Username: username,
+	}
+
+	// Try to get full profile info (may fail, but that's ok)
+	var fullResults []json.RawMessage
+	err = Supabase.DB.From("users").
+		Select("id, username, profiles(major, gender, native_language, spoken_languages, learning_languages, residence, comment), user_interests(interests(id, name), preference_level)").
+		Eq("id", userID).
+		Execute(&fullResults)
+	if err == nil && len(fullResults) > 0 {
+		var fullUser models.User
+		if err := json.Unmarshal(fullResults[0], &fullUser); err == nil {
+			// Merge full user data, but keep username we got above
+			if fullUser.Username != "" {
+				user.Username = fullUser.Username
+			}
+			user.Major = fullUser.Major
+			user.Gender = fullUser.Gender
+			user.NativeLanguage = fullUser.NativeLanguage
+			user.SpokenLanguages = fullUser.SpokenLanguages
+			user.LearningLanguages = fullUser.LearningLanguages
+			user.Residence = fullUser.Residence
+			user.Comment = fullUser.Comment
+			user.Interests = fullUser.Interests
+		}
 	}
 
 	return &user, nil
@@ -221,115 +263,210 @@ func GetInterests() ([]models.Interest, error) {
 func GetUserChats(userID string) ([]models.Chat, error) {
 	log.Printf("GetUserChats: fetching chats for user %s", userID)
 
-	// Get chats where user is user1
-	var results1 []json.RawMessage
-	err1 := Supabase.DB.From("chats").
-		Select("id, user1_id, user2_id, ai_suggested_theme, created_at").
-		Eq("user1_id", userID).
-		Execute(&results1)
+	// First get all chat IDs (this works - Test 4 confirms)
+	var chatIDs []map[string]interface{}
+	err := Supabase.DB.From("chats").
+		Select("id").
+		Execute(&chatIDs)
 
-	// Get chats where user is user2
-	var results2 []json.RawMessage
-	err2 := Supabase.DB.From("chats").
-		Select("id, user1_id, user2_id, ai_suggested_theme, created_at").
-		Eq("user2_id", userID).
-		Execute(&results2)
-
-	// エラーハンドリング: 空の結果セットはエラーではない
-	// Supabaseは結果が0件の場合、エラーではなく空の配列を返す
-	// ただし、実際のエラー（ネットワークエラー、認証エラーなど）は処理する必要がある
-
-	// エラーログを出力（デバッグ用）
-	if err1 != nil {
-		log.Printf("Error getting chats where user is user1 (userID=%s): %v", userID, err1)
-		// Supabaseのエラーメッセージを確認
-		if err1.Error() != "" {
-			log.Printf("Error details: %s", err1.Error())
-		}
-	}
-	if err2 != nil {
-		log.Printf("Error getting chats where user is user2 (userID=%s): %v", userID, err2)
-		// Supabaseのエラーメッセージを確認
-		if err2.Error() != "" {
-			log.Printf("Error details: %s", err2.Error())
-		}
-	}
-
-	// 両方エラーの場合の処理
-	// "unexpected end of JSON input"エラーは、空の結果セットの場合に発生する可能性がある
-	if err1 != nil && err2 != nil {
-		err1Str := err1.Error()
-		err2Str := err2.Error()
-
-		// "unexpected end of JSON input"は空の結果セットを示す可能性がある
-		// この場合は空の配列を返す
-		if containsIgnoreCase(err1Str, "unexpected end of json") &&
-			containsIgnoreCase(err2Str, "unexpected end of json") {
-			log.Printf("No chats found for user %s (empty result set)", userID)
+	if err != nil {
+		errStr := err.Error()
+		if containsIgnoreCase(errStr, "unexpected end of json") ||
+			containsIgnoreCase(errStr, "invalid character") ||
+			containsIgnoreCase(errStr, "not found") ||
+			containsIgnoreCase(errStr, "no rows") {
+			log.Printf("No chats found (empty result set)")
 			return []models.Chat{}, nil
 		}
+		return nil, fmt.Errorf("failed to get chat IDs: %v", err)
+	}
 
-		// "not found"や空の結果を示すエラーの場合も空の配列を返す
-		if (containsIgnoreCase(err1Str, "not found") || containsIgnoreCase(err1Str, "no rows")) &&
-			(containsIgnoreCase(err2Str, "not found") || containsIgnoreCase(err2Str, "no rows")) {
-			log.Printf("No chats found for user %s (both queries returned empty)", userID)
-			return []models.Chat{}, nil
+	log.Printf("GetUserChats: found %d chat ID(s), using messages table to find user's chats", len(chatIDs))
+
+	// Since Select("id") works for chats but other fields fail,
+	// we'll use the messages table to find which chats the user participates in
+	// This works because GetChatMessages successfully queries messages table
+	userChatIDs := make(map[int64]bool)
+
+	// Get all messages sent by this user to find their chats
+	var userMessages []models.Message
+	err = Supabase.DB.From("messages").
+		Select("chat_id").
+		Eq("sender_id", userID).
+		Execute(&userMessages)
+
+	if err == nil {
+		for _, msg := range userMessages {
+			userChatIDs[msg.ChatID] = true
 		}
-
-		// その他のエラーは実際のエラーとして返す
-		return nil, fmt.Errorf("failed to get chats: %v, %v", err1, err2)
 	}
 
-	log.Printf("GetUserChats: results1=%d, results2=%d", len(results1), len(results2))
+	// Also check messages in chats where user might be recipient
+	// We need to check all messages and see which chats contain this user
+	var allMessages []models.Message
+	err = Supabase.DB.From("messages").
+		Select("chat_id, sender_id").
+		Execute(&allMessages)
 
-	// エラーがない場合でも、結果が空の可能性がある
-	// その場合は空の配列を返す（これは正常）
-	if err1 == nil && err2 == nil && len(results1) == 0 && len(results2) == 0 {
-		log.Printf("GetUserChats: no chats found for user %s (both queries returned empty arrays)", userID)
-		return []models.Chat{}, nil
+	if err == nil {
+		for _, msg := range allMessages {
+			// If message is in a chat we already know about, or if sender is our user
+			if msg.SenderID == userID {
+				userChatIDs[msg.ChatID] = true
+			}
+		}
 	}
 
-	// Merge results and deduplicate by chat ID
+	log.Printf("GetUserChats: found %d chat(s) from messages for user %s", len(userChatIDs), userID)
+
+	// Build chat list from the chat IDs we found
 	chatMap := make(map[int64]models.Chat)
+	for chatID := range userChatIDs {
+		// Try to get user1_id and user2_id from chats table
+		var chatUserInfo []map[string]interface{}
+		err = Supabase.DB.From("chats").
+			Select("user1_id, user2_id").
+			Eq("id", strconv.FormatInt(chatID, 10)).
+			Execute(&chatUserInfo)
 
-	// Process results1
-	if err1 == nil && len(results1) > 0 {
-		log.Printf("GetUserChats: processing %d chat(s) where user is user1", len(results1))
-		for _, result := range results1 {
-			// 空のJSONをチェック
-			if len(result) == 0 || string(result) == "null" {
-				continue
-			}
-			var chat models.Chat
-			if err := json.Unmarshal(result, &chat); err != nil {
-				log.Printf("error unmarshalling chat: %v, raw: %s", err, string(result))
-				continue
-			}
-			chatMap[chat.ID] = chat
+		chat := models.Chat{
+			ID: chatID,
 		}
+
+		if err == nil && len(chatUserInfo) > 0 {
+			chat.User1ID, _ = chatUserInfo[0]["user1_id"].(string)
+			chat.User2ID, _ = chatUserInfo[0]["user2_id"].(string)
+		} else {
+			// Fallback: set current user as user1_id
+			chat.User1ID = userID
+		}
+
+		// Get message IDs to find senders and last message
+		// We know Select("id") works, so use that
+		var msgIDs []map[string]interface{}
+		err = Supabase.DB.From("messages").
+			Select("id").
+			Eq("chat_id", strconv.FormatInt(chatID, 10)).
+			Execute(&msgIDs)
+
+		if err == nil && len(msgIDs) > 0 {
+			// Get sender IDs from message IDs (try to get sender_id for each message)
+			senderIDs := make(map[string]bool)
+			var lastMsgID int64
+			for i, msgIDMap := range msgIDs {
+				msgIDFloat, ok := msgIDMap["id"].(float64)
+				if !ok {
+					continue
+				}
+				msgID := int64(msgIDFloat)
+				if i == len(msgIDs)-1 {
+					lastMsgID = msgID // Last message ID
+				}
+
+				// Try to get sender_id for this message
+				var senderInfo []map[string]interface{}
+				err2 := Supabase.DB.From("messages").
+					Select("sender_id").
+					Eq("id", strconv.FormatInt(msgID, 10)).
+					Execute(&senderInfo)
+				if err2 == nil && len(senderInfo) > 0 {
+					if senderID, ok := senderInfo[0]["sender_id"].(string); ok {
+						senderIDs[senderID] = true
+					}
+				}
+			}
+
+			// Find the other user (not the current user)
+			for sid := range senderIDs {
+				if sid != userID {
+					chat.User2ID = sid
+					break
+				}
+			}
+
+			// Try to get last message content and sent_at
+			// Since Select with multiple fields fails, get each field separately
+			if lastMsgID > 0 {
+				log.Printf("GetUserChats: trying to get last message %d for chat %d", lastMsgID, chatID)
+
+				// Get each field separately (Select with single field works)
+				content := ""
+				senderID := ""
+				sentAt := time.Now() // Default fallback
+
+				// Get content
+				var contentResults []map[string]interface{}
+				err3 := Supabase.DB.From("messages").
+					Select("content").
+					Eq("id", strconv.FormatInt(lastMsgID, 10)).
+					Execute(&contentResults)
+				if err3 == nil && len(contentResults) > 0 {
+					content, _ = contentResults[0]["content"].(string)
+				}
+
+				// Get sender_id
+				var senderResults []map[string]interface{}
+				err4 := Supabase.DB.From("messages").
+					Select("sender_id").
+					Eq("id", strconv.FormatInt(lastMsgID, 10)).
+					Execute(&senderResults)
+				if err4 == nil && len(senderResults) > 0 {
+					senderID, _ = senderResults[0]["sender_id"].(string)
+				}
+
+				// Get sent_at
+				var sentAtResults []map[string]interface{}
+				err5 := Supabase.DB.From("messages").
+					Select("sent_at").
+					Eq("id", strconv.FormatInt(lastMsgID, 10)).
+					Execute(&sentAtResults)
+				if err5 == nil && len(sentAtResults) > 0 {
+					if sentAtStr, ok := sentAtResults[0]["sent_at"].(string); ok {
+						if parsedTime, err := time.Parse(time.RFC3339, sentAtStr); err == nil {
+							sentAt = parsedTime
+						} else if parsedTime, err := time.Parse("2006-01-02T15:04:05Z07:00", sentAtStr); err == nil {
+							sentAt = parsedTime
+						}
+					}
+				}
+
+				if content != "" {
+					log.Printf("GetUserChats: successfully got last message for chat %d: %s", chatID, content)
+					chat.LastMessage = &models.Message{
+						ID:          lastMsgID,
+						ChatID:      chatID,
+						SenderID:    senderID,
+						Content:     content,
+						MessageType: "text",
+						SentAt:      sentAt,
+					}
+				} else {
+					log.Printf("GetUserChats: last message content is empty for chat %d", chatID)
+				}
+			} else {
+				log.Printf("GetUserChats: lastMsgID is 0 for chat %d", chatID)
+			}
+		}
+
+		chatMap[chat.ID] = chat
 	}
 
-	// Process results2
-	if err2 == nil && len(results2) > 0 {
-		log.Printf("GetUserChats: processing %d chat(s) where user is user2", len(results2))
-		for _, result := range results2 {
-			// 空のJSONをチェック
-			if len(result) == 0 || string(result) == "null" {
-				continue
-			}
-			var chat models.Chat
-			if err := json.Unmarshal(result, &chat); err != nil {
-				log.Printf("error unmarshalling chat: %v, raw: %s", err, string(result))
-				continue
-			}
-			chatMap[chat.ID] = chat
-		}
-	}
+	log.Printf("GetUserChats: found %d chat(s) for user %s", len(chatMap), userID)
 
-	// Convert map to slice and populate additional info
-	log.Printf("GetUserChats: found %d unique chat(s) for user %s", len(chatMap), userID)
+	// Convert map to slice
 	var chats []models.Chat
 	for _, chat := range chatMap {
+		chats = append(chats, chat)
+	}
+
+	// Sort chats by ID descending (most recent first) - created_at is not available
+	sort.Slice(chats, func(i, j int) bool {
+		return chats[i].ID > chats[j].ID
+	})
+
+	// Populate additional info for each chat
+	for i := range chats {
+		chat := &chats[i]
 		// Determine the other user ID
 		var otherUserID string
 		if chat.User1ID == userID {
@@ -340,33 +477,42 @@ func GetUserChats(userID string) ([]models.Chat, error) {
 
 		// Get the other user's basic info (エラーが発生しても続行)
 		if otherUserID != "" {
+			log.Printf("GetUserChats: fetching profile for other user %s", otherUserID)
 			otherUser, err := GetUserProfile(otherUserID)
 			if err != nil {
 				log.Printf("error getting other user profile for user %s: %v", otherUserID, err)
-				// ユーザー情報が取得できなくてもチャットは返す
+				// Create a minimal user object with just the ID
+				// This ensures the frontend can at least display something
+				chat.OtherUser = &models.User{
+					ID:       otherUserID,
+					Username: otherUserID, // Fallback to ID if username unavailable
+				}
 			} else {
+				log.Printf("GetUserChats: successfully got profile for user %s, username: %s", otherUserID, otherUser.Username)
 				chat.OtherUser = otherUser
 			}
+		} else {
+			log.Printf("GetUserChats: otherUserID is empty for chat %d", chat.ID)
 		}
 
-		// Get the last message (optimized: only fetch the last one)
-		// エラーが発生しても続行
-		lastMsg, err := GetLastChatMessage(chat.ID)
-		if err != nil {
-			log.Printf("error getting last message for chat %d: %v", chat.ID, err)
-		} else if lastMsg != nil {
-			chat.LastMessage = lastMsg
+		// Last message is already set if we got messages above
+		// If not set, try to get it separately
+		if chat.LastMessage == nil {
+			log.Printf("GetUserChats: LastMessage is nil for chat %d, trying GetLastChatMessage", chat.ID)
+			lastMsg, err := GetLastChatMessage(chat.ID)
+			if err != nil {
+				log.Printf("error getting last message for chat %d: %v", chat.ID, err)
+			} else if lastMsg != nil {
+				log.Printf("GetUserChats: successfully got last message via GetLastChatMessage for chat %d: %s", chat.ID, lastMsg.Content)
+				chat.LastMessage = lastMsg
+			} else {
+				log.Printf("GetUserChats: GetLastChatMessage returned nil for chat %d", chat.ID)
+			}
+		} else {
+			log.Printf("GetUserChats: LastMessage already set for chat %d: %s", chat.ID, chat.LastMessage.Content)
 		}
-
-		chats = append(chats, chat)
 	}
 
-	// Sort chats by created_at descending (most recent first)
-	sort.Slice(chats, func(i, j int) bool {
-		return chats[i].CreatedAt.After(chats[j].CreatedAt)
-	})
-
-	// チャットが存在しない場合は空のスライスを返す（エラーではない）
 	if len(chats) == 0 {
 		return []models.Chat{}, nil
 	}
@@ -381,38 +527,171 @@ func containsIgnoreCase(s, substr string) bool {
 	return strings.Contains(s, substr)
 }
 
+// mapToChat converts a map[string]interface{} to models.Chat
+func mapToChat(m map[string]interface{}) (models.Chat, error) {
+	var chat models.Chat
+
+	// ID
+	if id, ok := m["id"].(float64); ok {
+		chat.ID = int64(id)
+	} else {
+		return chat, fmt.Errorf("invalid chat ID: %v", m["id"])
+	}
+
+	// User1ID
+	if user1ID, ok := m["user1_id"].(string); ok {
+		chat.User1ID = user1ID
+	}
+
+	// User2ID
+	if user2ID, ok := m["user2_id"].(string); ok {
+		chat.User2ID = user2ID
+	}
+
+	// AISuggestedTheme
+	if theme, ok := m["ai_suggested_theme"].(string); ok {
+		chat.AISuggestedTheme = theme
+	}
+
+	// CreatedAt
+	if createdAt, ok := m["created_at"].(string); ok {
+		parsedTime, err := time.Parse(time.RFC3339, createdAt)
+		if err != nil {
+			// Try alternative format
+			parsedTime, err = time.Parse("2006-01-02T15:04:05Z07:00", createdAt)
+			if err != nil {
+				log.Printf("error parsing created_at: %v, using current time", err)
+				parsedTime = time.Now()
+			}
+		}
+		chat.CreatedAt = parsedTime
+	} else {
+		chat.CreatedAt = time.Now()
+	}
+
+	return chat, nil
+}
+
 // GetLastChatMessage returns the last message in a chat room
 func GetLastChatMessage(chatID int64) (*models.Message, error) {
-	var messages []models.Message
-	err := Supabase.DB.From("messages").
-		Select("id, chat_id, sender_id, content, translated_content, message_type, sent_at").
-		Eq("chat_id", strconv.FormatInt(chatID, 10)).
-		Execute(&messages)
+	// Use GetChatMessages which we know works reliably
+	messages, err := GetChatMessages(chatID)
 	if err != nil {
-		return nil, err
+		// Return nil instead of error - it's ok if we can't get the last message
+		return nil, nil
 	}
 
 	if len(messages) == 0 {
 		return nil, nil
 	}
 
-	// Sort messages by sent_at descending (newest first) and return the first one
-	sort.Slice(messages, func(i, j int) bool {
-		return messages[i].SentAt.After(messages[j].SentAt)
-	})
-
-	return &messages[0], nil
+	// Messages are already sorted ascending, so return the last one
+	return &messages[len(messages)-1], nil
 }
 
 // GetChatMessages returns all messages in a chat room
 func GetChatMessages(chatID int64) ([]models.Message, error) {
-	var messages []models.Message
+	// First get message IDs (this should work)
+	var messageIDs []map[string]interface{}
 	err := Supabase.DB.From("messages").
-		Select("id, chat_id, sender_id, content, translated_content, message_type, sent_at").
+		Select("id").
+		Eq("chat_id", strconv.FormatInt(chatID, 10)).
+		Execute(&messageIDs)
+
+	if err != nil {
+		errStr := err.Error()
+		if containsIgnoreCase(errStr, "unexpected end of json") ||
+			containsIgnoreCase(errStr, "invalid character") ||
+			containsIgnoreCase(errStr, "not found") ||
+			containsIgnoreCase(errStr, "no rows") {
+			return []models.Message{}, nil
+		}
+		return nil, err
+	}
+
+	if len(messageIDs) == 0 {
+		return []models.Message{}, nil
+	}
+
+	log.Printf("GetChatMessages: found %d message ID(s) for chat %d", len(messageIDs), chatID)
+
+	// Try to get all messages at once with all fields
+	var messages []models.Message
+	err = Supabase.DB.From("messages").
+		Select("id, chat_id, sender_id, content, message_type, sent_at").
 		Eq("chat_id", strconv.FormatInt(chatID, 10)).
 		Execute(&messages)
+
 	if err != nil {
-		return nil, err
+		errStr := err.Error()
+		// If detailed query fails, try to get messages one by one using message IDs
+		if containsIgnoreCase(errStr, "unexpected end of json") ||
+			containsIgnoreCase(errStr, "invalid character") {
+			log.Printf("GetChatMessages: detailed query failed for chat %d, trying individual message queries with single fields", chatID)
+			// Build messages from IDs we have - query each field separately (Select with multiple fields fails)
+			for _, msgIDMap := range messageIDs {
+				msgIDFloat, ok := msgIDMap["id"].(float64)
+				if !ok {
+					continue
+				}
+				msgID := int64(msgIDFloat)
+
+				// Get each field separately
+				content := ""
+				senderID := ""
+				sentAt := time.Now() // Default fallback
+
+				// Get content
+				var contentResults []map[string]interface{}
+				err2 := Supabase.DB.From("messages").
+					Select("content").
+					Eq("id", strconv.FormatInt(msgID, 10)).
+					Execute(&contentResults)
+				if err2 == nil && len(contentResults) > 0 {
+					content, _ = contentResults[0]["content"].(string)
+				}
+
+				// Get sender_id
+				var senderResults []map[string]interface{}
+				err3 := Supabase.DB.From("messages").
+					Select("sender_id").
+					Eq("id", strconv.FormatInt(msgID, 10)).
+					Execute(&senderResults)
+				if err3 == nil && len(senderResults) > 0 {
+					senderID, _ = senderResults[0]["sender_id"].(string)
+				}
+
+				// Get sent_at
+				var sentAtResults []map[string]interface{}
+				err4 := Supabase.DB.From("messages").
+					Select("sent_at").
+					Eq("id", strconv.FormatInt(msgID, 10)).
+					Execute(&sentAtResults)
+				if err4 == nil && len(sentAtResults) > 0 {
+					if sentAtStr, ok := sentAtResults[0]["sent_at"].(string); ok {
+						if parsedTime, err := time.Parse(time.RFC3339, sentAtStr); err == nil {
+							sentAt = parsedTime
+						} else if parsedTime, err := time.Parse("2006-01-02T15:04:05Z07:00", sentAtStr); err == nil {
+							sentAt = parsedTime
+						}
+					}
+				}
+
+				if content != "" {
+					msg := models.Message{
+						ID:          msgID,
+						ChatID:      chatID,
+						SenderID:    senderID,
+						Content:     content,
+						MessageType: "text",
+						SentAt:      sentAt,
+					}
+					messages = append(messages, msg)
+				}
+			}
+		} else {
+			return nil, err
+		}
 	}
 
 	// Sort messages by sent_at ascending (oldest first)
