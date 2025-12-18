@@ -93,7 +93,10 @@ func main() {
 	// Chat routes
 	chatGroup := apiV1.Group("/chats")
 	chatGroup.GET("", handlers.GetChats, auth.EchoJWTMiddleware())
+	// More specific routes must be defined before the generic one
+	chatGroup.GET("/with/:otherUserId", handlers.GetOrCreateChatWithUser, auth.EchoJWTMiddleware())
 	chatGroup.GET("/:chatId/messages", handlers.GetChatMessages, auth.EchoJWTMiddleware())
+	chatGroup.GET("/:chatId", handlers.GetChatDetail, auth.EchoJWTMiddleware())
 
 	// Search routes
 	searchGroup := apiV1.Group("/search")
@@ -101,6 +104,7 @@ func main() {
 	searchGroup.POST("/users", handlers.SearchUsersAdvanced, auth.EchoJWTMiddleware())
 
 	// WebSocket route with JWT middleware
+	// Note: WebSocket connections typically pass token as query parameter (?token=...)
 	e.GET("/ws/chat/:chatID", func(c echo.Context) error {
 		chatIDStr := c.Param("chatID")
 		chatID, err := strconv.ParseInt(chatIDStr, 10, 64)
@@ -111,6 +115,16 @@ func main() {
 		userID, ok := c.Get("user_id").(string)
 		if !ok || userID == "" {
 			return c.String(http.StatusUnauthorized, "User ID not found in token")
+		}
+
+		// Verify that the user is a participant in this chat
+		isParticipant, err := db.IsChatParticipant(chatID, userID)
+		if err != nil {
+			log.Printf("Error verifying chat access: %v", err)
+			return c.String(http.StatusInternalServerError, "Failed to verify chat access")
+		}
+		if !isParticipant {
+			return c.String(http.StatusForbidden, "You are not a participant in this chat")
 		}
 
 		handlers.WsHandler(hub, c.Response(), c.Request(), chatID, userID)

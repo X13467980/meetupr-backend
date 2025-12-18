@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"meetupr-backend/internal/db"
+	"meetupr-backend/internal/models"
 
 	"github.com/gorilla/websocket"
 )
@@ -91,34 +92,38 @@ func (c *Client) writePump() {
 	defer func() {
 		ticker.Stop()
 		c.conn.Close()
+		log.Printf("writePump: connection closed for chat %d, user %s", c.chatID, c.userID)
 	}()
+
+	messageCount := 0
 	for {
 		select {
 		case message, ok := <-c.send:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
+				log.Printf("writePump: send channel closed for chat %d, user %s", c.chatID, c.userID)
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
 
-			w, err := c.conn.NextWriter(websocket.TextMessage)
+			// Write message as a separate WebSocket message (not batched with newlines)
+			// This makes it easier for frontend to parse each message individually
+			err := c.conn.WriteMessage(websocket.TextMessage, message)
 			if err != nil {
+				log.Printf("writePump: failed to write message for chat %d: %v", c.chatID, err)
 				return
 			}
-			w.Write(message)
+			messageCount++
 
-			n := len(c.send)
-			for i := 0; i < n; i++ {
-				w.Write([]byte{'\n'})
-				w.Write(<-c.send)
-			}
-
-			if err := w.Close(); err != nil {
-				return
+			// Try to unmarshal to log content
+			var msgPreview models.Message
+			if err := json.Unmarshal(message, &msgPreview); err == nil {
+				log.Printf("writePump: wrote message %d to WebSocket for chat %d: id=%d, content=%s", messageCount, c.chatID, msgPreview.ID, msgPreview.Content)
 			}
 		case <-ticker.C:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				log.Printf("writePump: failed to send ping for chat %d: %v", c.chatID, err)
 				return
 			}
 		}
@@ -179,11 +184,25 @@ func (h *Hub) Run() {
 			}
 			log.Printf("Message saved to DB: chat_id=%d, sender_id=%s, content=%s", msg.ChatID, msg.SenderID, msg.Content)
 
+			// Convert handlers.Message to models.Message format for frontend
+			fullMsg := models.Message{
+				ChatID:      msg.ChatID,
+				SenderID:    msg.SenderID,
+				Content:     msg.Content,
+				MessageType: "text",
+				SentAt:      time.Now(),
+			}
+			messageToBroadcast, err := json.Marshal(fullMsg)
+			if err != nil {
+				log.Printf("error marshalling message: %v", err)
+				continue
+			}
+
 			if roomClients, ok := h.rooms[msg.ChatID]; ok {
 				log.Printf("Broadcasting message to %d client(s) in chat %d", len(roomClients), msg.ChatID)
 				for client := range roomClients {
 					select {
-					case client.send <- jsonMessage:
+					case client.send <- messageToBroadcast:
 						log.Printf("Message sent to client: chat_id=%d, user_id=%s", client.chatID, client.userID)
 					default:
 						log.Printf("Client send channel full, removing client: user_id=%s", client.userID)
@@ -201,11 +220,14 @@ func (h *Hub) Run() {
 
 // WsHandler handles websocket requests from the peer.
 func WsHandler(hub *Hub, w http.ResponseWriter, r *http.Request, chatID int64, userID string) {
+	log.Printf("WsHandler: WebSocket connection attempt for chat %d, user %s", chatID, userID)
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Println(err)
+		log.Printf("WsHandler: failed to upgrade connection: %v", err)
 		return
 	}
+	log.Printf("WsHandler: WebSocket connection established for chat %d, user %s", chatID, userID)
+
 	client := &Client{
 		hub:    hub,
 		conn:   conn,
@@ -214,6 +236,7 @@ func WsHandler(hub *Hub, w http.ResponseWriter, r *http.Request, chatID int64, u
 		userID: userID,
 	}
 	client.hub.register <- client
+	log.Printf("WsHandler: client registered for chat %d", chatID)
 
 	// Load and send message history
 	go loadMessageHistory(client)
@@ -244,24 +267,32 @@ func loadMessageHistory(c *Client) {
 		return
 	}
 
-	log.Printf("Loaded %d message(s) from history for chat %d", len(messages), c.chatID)
+	log.Printf("loadMessageHistory: Loaded %d message(s) from history for chat %d", len(messages), c.chatID)
 
+	if len(messages) == 0 {
+		log.Printf("loadMessageHistory: No messages found for chat %d", c.chatID)
+		return
+	}
+
+	// Send messages in the format that frontend expects (models.Message format)
+	sentCount := 0
 	for _, dbMsg := range messages {
-		// Convert models.Message to handlers.Message format
-		msg := Message{
-			Content:  dbMsg.Content,
-			ChatID:   dbMsg.ChatID,
-			SenderID: dbMsg.SenderID,
-		}
-		jsonMessage, err := json.Marshal(msg)
+		// Use the full models.Message structure with all fields
+		jsonMessage, err := json.Marshal(dbMsg)
 		if err != nil {
-			log.Printf("error marshalling history message: %v", err)
+			log.Printf("loadMessageHistory: error marshalling history message: %v", err)
 			continue
 		}
 		select {
 		case c.send <- jsonMessage:
+			sentCount++
+			log.Printf("loadMessageHistory: Sent history message %d/%d: id=%d, content=%s", sentCount, len(messages), dbMsg.ID, dbMsg.Content)
+		case <-time.After(5 * time.Second):
+			log.Printf("loadMessageHistory: timeout sending message %d, client send channel may be blocked", dbMsg.ID)
+			break
 		default:
-			log.Printf("client send channel full, skipping history message")
+			log.Printf("loadMessageHistory: client send channel full, skipping history message %d", dbMsg.ID)
 		}
 	}
+	log.Printf("loadMessageHistory: Finished sending %d/%d message(s) from history for chat %d", sentCount, len(messages), c.chatID)
 }

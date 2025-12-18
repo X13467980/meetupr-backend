@@ -56,19 +56,19 @@ func EchoJWTMiddleware() echo.MiddlewareFunc {
 			// Development mode: bypass authentication if DISABLE_AUTH is set
 			if os.Getenv("DISABLE_AUTH") == "true" {
 				log.Println("⚠️  WARNING: Authentication is DISABLED (development mode)")
-				
+
 				// Get user ID from X-Test-User-ID header or use default
 				testUserID := c.Request().Header.Get("X-Test-User-ID")
 				if testUserID == "" {
 					testUserID = "auth0|6917784d99703fe24aebd01d" // Default test user
 				}
-				
+
 				// Get email from X-Test-User-Email header or use default
 				testUserEmail := c.Request().Header.Get("X-Test-User-Email")
 				if testUserEmail == "" {
 					testUserEmail = "testuser1@example.com"
 				}
-				
+
 				c.Set("user_id", testUserID)
 				c.Set("user_email", testUserEmail)
 				return next(c)
@@ -76,13 +76,20 @@ func EchoJWTMiddleware() echo.MiddlewareFunc {
 
 			// Production mode: normal JWT authentication
 			authHeader := c.Request().Header.Get("Authorization")
-			if authHeader == "" {
-				return echo.NewHTTPError(http.StatusUnauthorized, "Authorization header required")
-			}
+			var tokenString string
 
-			tokenString := strings.TrimPrefix(authHeader, "Bearer ")
-			if tokenString == authHeader {
-				return echo.NewHTTPError(http.StatusUnauthorized, "Could not find bearer token in Authorization header")
+			if authHeader != "" {
+				// Token from Authorization header
+				tokenString = strings.TrimPrefix(authHeader, "Bearer ")
+				if tokenString == authHeader {
+					return echo.NewHTTPError(http.StatusUnauthorized, "Could not find bearer token in Authorization header")
+				}
+			} else {
+				// Token from query parameter (for WebSocket connections)
+				tokenString = c.QueryParam("token")
+				if tokenString == "" {
+					return echo.NewHTTPError(http.StatusUnauthorized, "Authorization header or token query parameter required")
+				}
 			}
 
 			// Define custom claims to extract email
@@ -115,7 +122,6 @@ func EchoJWTMiddleware() echo.MiddlewareFunc {
 				userEmail, _ = claims["email"].(string)
 			}
 			c.Set("user_email", userEmail)
-
 
 			return next(c)
 		}

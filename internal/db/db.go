@@ -856,56 +856,233 @@ func SearchUsersAdvanced(currentUserID string, keyword string, languages []strin
 func IsChatParticipant(chatID int64, userID string) (bool, error) {
 	log.Printf("IsChatParticipant: checking if user %s is participant in chat %d", userID, chatID)
 
-	// First, get the chat
-	var results []json.RawMessage
+	// Get user1_id and user2_id separately (Select with multiple fields fails)
+	var user1ID string
+	var user2ID string
+
+	// Get user1_id
+	var user1Results []map[string]interface{}
 	err := Supabase.DB.From("chats").
-		Select("id, user1_id, user2_id").
+		Select("user1_id").
 		Eq("id", strconv.FormatInt(chatID, 10)).
-		Execute(&results)
-
-	if err != nil {
-		errStr := err.Error()
-		log.Printf("IsChatParticipant: error querying chat %d: %v", chatID, err)
-
-		// "unexpected end of JSON input"は空の結果セットを示す可能性がある
-		if containsIgnoreCase(errStr, "unexpected end of json") {
-			log.Printf("IsChatParticipant: chat %d not found (empty result set)", chatID)
-			return false, nil
+		Execute(&user1Results)
+	if err == nil && len(user1Results) > 0 {
+		user1ID, _ = user1Results[0]["user1_id"].(string)
+	} else {
+		errStr := ""
+		if err != nil {
+			errStr = err.Error()
 		}
-
-		// "not found"や空の結果を示すエラーの場合もfalseを返す
-		if containsIgnoreCase(errStr, "not found") || containsIgnoreCase(errStr, "no rows") {
+		if containsIgnoreCase(errStr, "unexpected end of json") ||
+			containsIgnoreCase(errStr, "invalid character") ||
+			containsIgnoreCase(errStr, "not found") ||
+			containsIgnoreCase(errStr, "no rows") ||
+			len(user1Results) == 0 {
 			log.Printf("IsChatParticipant: chat %d not found", chatID)
 			return false, nil
 		}
-
-		return false, err
 	}
 
-	if len(results) == 0 {
-		log.Printf("IsChatParticipant: chat %d not found (no results)", chatID)
-		return false, nil
+	// Get user2_id
+	var user2Results []map[string]interface{}
+	err = Supabase.DB.From("chats").
+		Select("user2_id").
+		Eq("id", strconv.FormatInt(chatID, 10)).
+		Execute(&user2Results)
+	if err == nil && len(user2Results) > 0 {
+		user2ID, _ = user2Results[0]["user2_id"].(string)
 	}
 
 	// Check if user is either user1 or user2
-	var chat struct {
-		ID      int64  `json:"id"`
-		User1ID string `json:"user1_id"`
-		User2ID string `json:"user2_id"`
-	}
-
-	// Check if result is empty or null before unmarshalling
-	if len(results[0]) == 0 || string(results[0]) == "null" {
-		log.Printf("IsChatParticipant: chat %d result is empty or null", chatID)
-		return false, nil
-	}
-
-	if err := json.Unmarshal(results[0], &chat); err != nil {
-		log.Printf("IsChatParticipant: error unmarshalling chat %d: %v", chatID, err)
-		return false, err
-	}
-
-	isParticipant := chat.User1ID == userID || chat.User2ID == userID
-	log.Printf("IsChatParticipant: user %s is participant in chat %d: %v", userID, chatID, isParticipant)
+	isParticipant := user1ID == userID || user2ID == userID
+	log.Printf("IsChatParticipant: user %s is participant in chat %d: %v (user1=%s, user2=%s)", userID, chatID, isParticipant, user1ID, user2ID)
 	return isParticipant, nil
+}
+
+// GetChatDetail returns detailed information about a specific chat room
+func GetChatDetail(chatID int64, userID string) (*models.Chat, error) {
+	log.Printf("GetChatDetail: fetching chat %d for user %s", chatID, userID)
+
+	// Get chat basic info - fetch each field separately
+	chat := models.Chat{
+		ID: chatID,
+	}
+
+	// Get user1_id
+	var user1Results []map[string]interface{}
+	err := Supabase.DB.From("chats").
+		Select("user1_id").
+		Eq("id", strconv.FormatInt(chatID, 10)).
+		Execute(&user1Results)
+	if err == nil && len(user1Results) > 0 {
+		chat.User1ID, _ = user1Results[0]["user1_id"].(string)
+	}
+
+	// Get user2_id
+	var user2Results []map[string]interface{}
+	err = Supabase.DB.From("chats").
+		Select("user2_id").
+		Eq("id", strconv.FormatInt(chatID, 10)).
+		Execute(&user2Results)
+	if err == nil && len(user2Results) > 0 {
+		chat.User2ID, _ = user2Results[0]["user2_id"].(string)
+	}
+
+	// Verify that the user is a participant in this chat
+	if chat.User1ID != userID && chat.User2ID != userID {
+		return nil, fmt.Errorf("user %s is not a participant in chat %d", userID, chatID)
+	}
+
+	// Get ai_suggested_theme (optional)
+	var themeResults []map[string]interface{}
+	err = Supabase.DB.From("chats").
+		Select("ai_suggested_theme").
+		Eq("id", strconv.FormatInt(chatID, 10)).
+		Execute(&themeResults)
+	if err == nil && len(themeResults) > 0 {
+		if theme, ok := themeResults[0]["ai_suggested_theme"].(string); ok {
+			chat.AISuggestedTheme = theme
+		}
+	}
+
+	// Determine the other user ID
+	var otherUserID string
+	if chat.User1ID == userID {
+		otherUserID = chat.User2ID
+	} else {
+		otherUserID = chat.User1ID
+	}
+
+	// Get the other user's profile
+	if otherUserID != "" {
+		log.Printf("GetChatDetail: fetching profile for other user %s", otherUserID)
+		otherUser, err := GetUserProfile(otherUserID)
+		if err != nil {
+			log.Printf("error getting other user profile for user %s: %v", otherUserID, err)
+			// Create a minimal user object with just the ID
+			chat.OtherUser = &models.User{
+				ID:       otherUserID,
+				Username: otherUserID, // Fallback to ID if username unavailable
+			}
+		} else {
+			log.Printf("GetChatDetail: successfully got profile for user %s, username: %s", otherUserID, otherUser.Username)
+			chat.OtherUser = otherUser
+		}
+	}
+
+	// Get last message
+	lastMsg, err := GetLastChatMessage(chatID)
+	if err != nil {
+		log.Printf("error getting last message for chat %d: %v", chatID, err)
+	} else if lastMsg != nil {
+		log.Printf("GetChatDetail: successfully got last message for chat %d: %s", chatID, lastMsg.Content)
+		chat.LastMessage = lastMsg
+	}
+
+	return &chat, nil
+}
+
+// GetOrCreateChat finds an existing chat between two users or creates a new one
+// Returns the chat ID
+func GetOrCreateChat(user1ID, user2ID string) (int64, error) {
+	log.Printf("GetOrCreateChat: finding or creating chat between %s and %s", user1ID, user2ID)
+
+	// Ensure user1ID < user2ID for consistent ordering (to match unique index)
+	// The unique index uses LEAST(user1_id, user2_id) and GREATEST(user1_id, user2_id)
+	// So we need to check both orders: user1-user2 and user2-user1
+	var existingChatID int64
+	found := false
+
+	// Try to find existing chat: user1_id = user1ID and user2_id = user2ID
+	var results1 []map[string]interface{}
+	err1 := Supabase.DB.From("chats").
+		Select("id").
+		Eq("user1_id", user1ID).
+		Eq("user2_id", user2ID).
+		Execute(&results1)
+
+	if err1 == nil && len(results1) > 0 {
+		if idFloat, ok := results1[0]["id"].(float64); ok {
+			existingChatID = int64(idFloat)
+			found = true
+			log.Printf("GetOrCreateChat: found existing chat %d (user1=%s, user2=%s)", existingChatID, user1ID, user2ID)
+		}
+	}
+
+	// Try to find existing chat: user1_id = user2ID and user2_id = user1ID
+	if !found {
+		var results2 []map[string]interface{}
+		err2 := Supabase.DB.From("chats").
+			Select("id").
+			Eq("user1_id", user2ID).
+			Eq("user2_id", user1ID).
+			Execute(&results2)
+
+		if err2 == nil && len(results2) > 0 {
+			if idFloat, ok := results2[0]["id"].(float64); ok {
+				existingChatID = int64(idFloat)
+				found = true
+				log.Printf("GetOrCreateChat: found existing chat %d (user1=%s, user2=%s)", existingChatID, user2ID, user1ID)
+			}
+		}
+	}
+
+	// If chat exists, return it
+	if found {
+		return existingChatID, nil
+	}
+
+	// Chat doesn't exist, create a new one
+	log.Printf("GetOrCreateChat: no existing chat found, creating new chat")
+	chatData := map[string]interface{}{
+		"user1_id": user1ID,
+		"user2_id": user2ID,
+	}
+
+	var insertResults []map[string]interface{}
+	err := Supabase.DB.From("chats").Insert(chatData).Execute(&insertResults)
+	if err != nil {
+		errStr := err.Error()
+		// Check if it's a duplicate key error (race condition - another request created it)
+		if containsIgnoreCase(errStr, "duplicate key") || containsIgnoreCase(errStr, "unique constraint") {
+			log.Printf("GetOrCreateChat: chat was created by another request, retrying to find it")
+			// Retry finding the chat
+			var retryResults []map[string]interface{}
+			err1 := Supabase.DB.From("chats").
+				Select("id").
+				Eq("user1_id", user1ID).
+				Eq("user2_id", user2ID).
+				Execute(&retryResults)
+			if err1 == nil && len(retryResults) > 0 {
+				if idFloat, ok := retryResults[0]["id"].(float64); ok {
+					return int64(idFloat), nil
+				}
+			}
+			// Try reverse order
+			err2 := Supabase.DB.From("chats").
+				Select("id").
+				Eq("user1_id", user2ID).
+				Eq("user2_id", user1ID).
+				Execute(&retryResults)
+			if err2 == nil && len(retryResults) > 0 {
+				if idFloat, ok := retryResults[0]["id"].(float64); ok {
+					return int64(idFloat), nil
+				}
+			}
+		}
+		return 0, fmt.Errorf("failed to create chat: %v", err)
+	}
+
+	if len(insertResults) == 0 {
+		return 0, fmt.Errorf("chat creation succeeded but no ID returned")
+	}
+
+	// Extract the created chat ID
+	if idFloat, ok := insertResults[0]["id"].(float64); ok {
+		newChatID := int64(idFloat)
+		log.Printf("GetOrCreateChat: created new chat %d", newChatID)
+		return newChatID, nil
+	}
+
+	return 0, fmt.Errorf("chat creation succeeded but could not extract ID from response")
 }
