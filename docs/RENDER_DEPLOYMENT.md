@@ -50,7 +50,7 @@
 | `AUTH0_AUDIENCE` | `your-audience` | Auth0 の Audience |
 | `SUPABASE_URL` | `https://your-project.supabase.co` | Supabase プロジェクト URL |
 | `SUPABASE_KEY` | `your-supabase-anon-key` | Supabase の匿名キー |
-| `CORS_ALLOW_ORIGINS` | `https://your-frontend.vercel.app` | フロントエンドの URL（カンマ区切り） |
+| `CORS_ALLOW_ORIGINS` | `https://meetupr-frontend.vercel.app` | フロントエンドの URL（カンマ区切り、複数ある場合はカンマで区切る） |
 
 **注意**: 
 - `PORT` は Render が自動的に設定するため、手動で設定する必要はありません
@@ -146,15 +146,28 @@ services:
 ### 接続エラー
 
 - **CORS設定**: `CORS_ALLOW_ORIGINS` にフロントエンドの URL が正しく設定されているか確認
+  - 本番環境: `https://meetupr-frontend.vercel.app`
+  - 開発環境も許可する場合: `https://meetupr-frontend.vercel.app,http://localhost:3000`
 - **Supabase接続**: `SUPABASE_URL` と `SUPABASE_KEY` が正しいか確認
 - **Auth0設定**: `AUTH0_DOMAIN` と `AUTH0_AUDIENCE` が正しいか確認
+- **フロントエンドのAPIベースURL**: フロントエンドが正しいバックエンドURLを参照しているか確認（例: `https://meetupr-backend.onrender.com`）
 
 ## 🔐 セキュリティのベストプラクティス
 
 1. **環境変数の保護**: 機密情報は Render の「Secret」として保存
 2. **CORS設定**: 本番環境では、`CORS_ALLOW_ORIGINS` に許可するオリジンのみを設定
+   - 本番環境: `https://meetupr-frontend.vercel.app`
+   - 開発環境も許可する場合: `https://meetupr-frontend.vercel.app,http://localhost:3000`
 3. **HTTPS**: Render は自動的に HTTPS を提供（無料）
 4. **ログ**: 本番環境では、機密情報がログに出力されないように注意
+
+## 📝 フロントエンドとの連携
+
+フロントエンドが `https://meetupr-frontend.vercel.app` にデプロイされている場合：
+
+1. **CORS設定**: Render の環境変数 `CORS_ALLOW_ORIGINS` に `https://meetupr-frontend.vercel.app` を設定
+2. **フロントエンドのAPIベースURL**: フロントエンドの環境変数で、バックエンドのURL（例: `https://meetupr-backend.onrender.com`）を設定
+3. **WebSocket接続**: フロントエンドのWebSocket接続URLもバックエンドのURLに合わせて設定（例: `wss://meetupr-backend.onrender.com/ws/chat/{chatID}`）
 
 ## 📚 参考リンク
 

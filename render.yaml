@@ -18,4 +18,5 @@ services:
       - key: SUPABASE_KEY
         sync: false
       - key: CORS_ALLOW_ORIGINS
+        value: https://meetupr-frontend.vercel.app
         sync: false
