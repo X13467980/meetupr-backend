@@ -131,8 +131,14 @@ func main() {
 		return nil
 	}, auth.EchoJWTMiddleware())
 
-	log.Println("Server starting on port 8080...")
-	if err := e.Start(":8080"); err != nil && err != http.ErrServerClosed {
+	// Get port from environment variable (Render sets PORT env var)
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080" // Default port for local development
+	}
+
+	log.Printf("Server starting on port %s...", port)
+	if err := e.Start(":" + port); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
 }

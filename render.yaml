@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: meetupr-backend
+    env: go
+    region: oregon
+    plan: free
+    buildCommand: go build -o meetupr-backend ./cmd/meetupr-backend
+    startCommand: ./meetupr-backend
+    envVars:
+      - key: PORT
+        value: 8080
+      - key: AUTH0_DOMAIN
+        sync: false
+      - key: AUTH0_AUDIENCE
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: CORS_ALLOW_ORIGINS
+        sync: false
