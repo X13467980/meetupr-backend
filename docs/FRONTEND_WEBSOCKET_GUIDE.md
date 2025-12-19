@@ -398,3 +398,4 @@ export function useChatWebSocket(chatId: Ref<number> | number, token: Ref<string
 1. 上記のコードをフロントエンドプロジェクトに実装
 2. ブラウザの開発者ツールでWebSocket接続とメッセージの送受信を確認
 3. 必要に応じてUIの改善（ローディング状態、エラー表示など）
+

@@ -72,3 +72,4 @@ func main() {
 		fmt.Println("   go run scripts/create_chat_for_user.go")
 	}
 }
+

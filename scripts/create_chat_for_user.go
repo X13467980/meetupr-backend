@@ -209,3 +209,4 @@ func createSampleMessages(chatID int64, user1ID, user2ID string) {
 
 	fmt.Printf("✅ Created %d sample messages\n", len(messages))
 }
+

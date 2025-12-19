@@ -47,3 +47,4 @@ func main() {
 	fmt.Printf("📄 Chat Details:\n")
 	fmt.Println(string(jsonData))
 }
+

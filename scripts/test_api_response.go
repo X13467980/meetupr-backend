@@ -35,3 +35,4 @@ func main() {
 	fmt.Println("API Response JSON:")
 	fmt.Println(string(jsonData))
 }
+
