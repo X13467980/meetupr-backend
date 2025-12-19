@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Chat Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .container {
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        input, button {
+            padding: 10px;
+            margin: 5px;
+            font-size: 14px;
+        }
+        input[type="text"] {
+            width: 300px;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+            border-radius: 3px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        #messages {
+            height: 400px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin-top: 10px;
+            background-color: #f9f9f9;
+        }
+        .message {
+            margin: 10px 0;
+            padding: 8px;
+            border-radius: 3px;
+            background-color: white;
+        }
+        .message.sent {
+            background-color: #e3f2fd;
+        }
+        .message.received {
+            background-color: #f1f8e9;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 3px;
+        }
+        .status.connected {
+            background-color: #4CAF50;
+            color: white;
+        }
+        .status.disconnected {
+            background-color: #f44336;
+            color: white;
+        }
+        .status.connecting {
+            background-color: #ff9800;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <h1>WebSocket Chat Test Client</h1>
+    
+    <div class="container">
+        <h2>接続設定</h2>
+        <div>
+            <label>サーバーアドレス:</label>
+            <input type="text" id="serverAddr" value="localhost:8080" placeholder="localhost:8080">
+        </div>
+        <div>
+            <label>チャットID:</label>
+            <input type="text" id="chatID" value="1" placeholder="1">
+        </div>
+        <div>
+            <label>JWTトークン:</label>
+            <input type="text" id="token" placeholder="Bearer token here" style="width: 500px;">
+        </div>
+        <div>
+            <button id="connectBtn" onclick="connect()">接続</button>
+            <button id="disconnectBtn" onclick="disconnect()" disabled>切断</button>
+        </div>
+        <div id="status" class="status disconnected">未接続</div>
+    </div>
+
+    <div class="container">
+        <h2>メッセージ送信</h2>
+        <div>
+            <input type="text" id="messageInput" placeholder="メッセージを入力..." disabled>
+            <button id="sendBtn" onclick="sendMessage()" disabled>送信</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <h2>メッセージ履歴</h2>
+        <div id="messages"></div>
+    </div>
+
+    <script>
+        let ws = null;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 5;
+
+        function updateStatus(status, message) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.className = 'status ' + status;
+            statusDiv.textContent = message;
+        }
+
+        function addMessage(content, type) {
+            const messagesDiv = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message ' + type;
+            const timestamp = new Date().toLocaleTimeString();
+            messageDiv.innerHTML = `<strong>[${timestamp}]</strong> ${content}`;
+            messagesDiv.appendChild(messageDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        function connect() {
+            const serverAddr = document.getElementById('serverAddr').value;
+            const chatID = document.getElementById('chatID').value;
+            const token = document.getElementById('token').value;
+
+            if (!token) {
+                alert('JWTトークンを入力してください');
+                return;
+            }
+
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsHost = serverAddr.startsWith('http') ? serverAddr.replace(/^https?:\/\//, '') : serverAddr;
+            const wsUrl = `${wsProtocol}//${wsHost}/ws/chat/${chatID}`;
+
+            updateStatus('connecting', '接続中...');
+            addMessage(`接続を試みています: ${wsUrl}`, 'sent');
+
+            ws = new WebSocket(wsUrl, [], {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+
+            // WebSocket APIでは直接ヘッダーを設定できないため、クエリパラメータや別の方法が必要
+            // この実装では、サーバー側でクエリパラメータからトークンを取得する必要がある
+            // または、接続前にHTTPリクエストでトークンを検証し、セッションIDを取得する方法もある
+            
+            // 代替案: URLにトークンを含める（セキュリティ上推奨されないが、テスト用）
+            // const wsUrlWithToken = `${wsProtocol}//${wsHost}/ws/chat/${chatID}?token=${encodeURIComponent(token)}`;
+            // ws = new WebSocket(wsUrlWithToken);
+
+            ws.onopen = function() {
+                updateStatus('connected', '接続済み');
+                addMessage('WebSocket接続が確立されました', 'received');
+                document.getElementById('connectBtn').disabled = true;
+                document.getElementById('disconnectBtn').disabled = false;
+                document.getElementById('messageInput').disabled = false;
+                document.getElementById('sendBtn').disabled = false;
+                reconnectAttempts = 0;
+            };
+
+            ws.onmessage = function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    addMessage(`受信: ${JSON.stringify(data, null, 2)}`, 'received');
+                } catch (e) {
+                    addMessage(`受信: ${event.data}`, 'received');
+                }
+            };
+
+            ws.onerror = function(error) {
+                console.error('WebSocket error:', error);
+                addMessage('エラーが発生しました: ' + error, 'received');
+                updateStatus('disconnected', 'エラー');
+            };
+
+            ws.onclose = function(event) {
+                updateStatus('disconnected', '切断されました');
+                addMessage(`接続が閉じられました (コード: ${event.code}, 理由: ${event.reason})`, 'received');
+                document.getElementById('connectBtn').disabled = false;
+                document.getElementById('disconnectBtn').disabled = true;
+                document.getElementById('messageInput').disabled = true;
+                document.getElementById('sendBtn').disabled = true;
+
+                // 自動再接続（オプション）
+                if (reconnectAttempts < maxReconnectAttempts && event.code !== 1000) {
+                    reconnectAttempts++;
+                    addMessage(`${reconnectAttempts}回目の再接続を試みます...`, 'received');
+                    setTimeout(connect, 2000 * reconnectAttempts);
+                }
+            };
+        }
+
+        function disconnect() {
+            if (ws) {
+                ws.close(1000, 'User disconnected');
+                ws = null;
+            }
+        }
+
+        function sendMessage() {
+            const messageInput = document.getElementById('messageInput');
+            const message = messageInput.value.trim();
+
+            if (!message || !ws || ws.readyState !== WebSocket.OPEN) {
+                return;
+            }
+
+            const messageData = {
+                content: message
+            };
+
+            ws.send(JSON.stringify(messageData));
+            addMessage(`送信: ${message}`, 'sent');
+            messageInput.value = '';
+        }
+
+        // Enterキーで送信
+        document.getElementById('messageInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+    </script>
+</body>
+</html>
+

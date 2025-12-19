@@ -1,0 +1,308 @@
+openapi: 3.0.0
+info:
+  title: MeetUP+R API
+  description: API specification for the MeetUP+R backend application.
+  version: "1.0.0"
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+tags:
+  - name: users
+    description: User management
+  - name: websocket
+    description: Real-time chat operations
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: "Auth0 JWT token"
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Auth0 User ID
+          example: "auth0|xxxxxxxxxx"
+        email:
+          type: string
+          format: email
+          example: "user@example.com"
+        username:
+          type: string
+          example: "your_username"
+        is_oic_verified:
+          type: boolean
+          description: OIC student verification status
+          example: false
+        created_at:
+          type: string
+          format: date-time
+          example: "2025-11-14T10:00:00Z"
+    UserProfileResponse:
+      type: object
+      properties:
+        user_id:
+          type: string
+          example: "auth0|xxxxxxxxxx"
+        email:
+          type: string
+          format: email
+          example: "user@example.com"
+        username:
+          type: string
+          example: "your_username"
+        major:
+          type: string
+          example: "情報理工学部"
+        gender:
+          type: string
+          example: "男性"
+        native_language:
+          type: string
+          example: "日本語"
+        spoken_languages:
+          type: array
+          items:
+            type: string
+          example: ["英語"]
+        learning_languages:
+          type: array
+          items:
+            type: string
+          example: ["韓国語"]
+        residence:
+          type: string
+          example: "大阪"
+        comment:
+          type: string
+          example: "よろしくお願いします！"
+        interests:
+          type: array
+          items:
+            $ref: '#/components/schemas/Interest'
+        last_updated:
+          type: string
+          format: date-time
+          example: "2025-11-14T11:00:00Z"
+    Interest:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: "ゲーム"
+        preference_level:
+          type: integer
+          example: 5
+    RegisterUserRequest:
+      type: object
+      required:
+        - username
+      properties:
+        username:
+          type: string
+          example: "your_username"
+    UpdateUserProfileRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          example: "new_username"
+        major:
+          type: string
+          example: "情報理工学部"
+        gender:
+          type: string
+          example: "男性"
+        native_language:
+          type: string
+          example: "日本語"
+        spoken_languages:
+          type: array
+          items:
+            type: string
+          example: ["英語"]
+        learning_languages:
+          type: array
+          items:
+            type: string
+          example: ["韓国語"]
+        residence:
+          type: string
+          example: "大阪"
+        comment:
+          type: string
+          example: "よろしくお願いします！"
+        interest_ids:
+          type: array
+          items:
+            type: integer
+          example: [1, 2]
+    Error:
+      type: object
+      properties:
+        message:
+          type: string
+security:
+  - bearerAuth: []
+paths:
+  /api/v1/users/register:
+    post:
+      tags:
+        - users
+      summary: Register a new user
+      description: Register a new user after Auth0 authentication. The user ID and email are extracted from the JWT token.
+      operationId: registerUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterUserRequest'
+      responses:
+        '201':
+          description: User created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '409':
+          description: User with this email or username already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/users/me:
+    get:
+      tags:
+        - users
+      summary: Get current user's profile
+      description: Get the detailed profile of the currently logged-in user.
+      operationId: getMyProfile
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfileResponse'
+        '404':
+          description: User profile not found
+    put:
+      tags:
+        - users
+      summary: Update current user's profile
+      description: Update the profile of the currently logged-in user.
+      operationId: updateMyProfile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserProfileRequest'
+      responses:
+        '200':
+          description: Profile updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfileResponse'
+  /api/v1/users:
+    get:
+      tags:
+        - users
+      summary: Search for users
+      description: Search for other users based on criteria.
+      operationId: searchUsers
+      parameters:
+        - name: interest_id
+          in: query
+          schema:
+            type: integer
+          description: Interest ID
+        - name: learning_language
+          in: query
+          schema:
+            type: string
+          description: Language the user wants to learn
+        - name: spoken_language
+          in: query
+          schema:
+            type: string
+          description: Language the user can speak
+      responses:
+        '200':
+          description: A list of users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+  /api/v1/users/{userId}:
+    get:
+      tags:
+        - users
+      summary: Get a user's public profile
+      description: Get the public profile of a specific user by their ID.
+      operationId: getUserProfile
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The ID of the user to retrieve.
+      responses:
+        '200':
+          description: User profile found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '404':
+          description: User not found
+  /ws/chat/{chatId}:
+    get:
+      tags:
+        - websocket
+      summary: Establish a WebSocket connection for a chat
+      description: |
+        Upgrades the HTTP connection to a WebSocket connection for real-time messaging within a specific chat room.
+        Authentication is required. The server will send message history upon connection, and then broadcast new messages.
+
+        **Client -> Server Message Format:**
+        ```json
+        {
+          "content": "こんにちは！"
+        }
+        ```
+
+        **Server -> Client Message Format:**
+        ```json
+        {
+          "content": "こんにちは！",
+          "chat_id": 123,
+          "sender_id": "auth0|xxxxxxxxxx"
+        }
+        ```
+      operationId: handleWebSocket
+      parameters:
+        - name: chatId
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: The ID of the chat to connect to.
+      responses:
+        '101':
+          description: Switching protocols to WebSocket.
+        '400':
+          description: Bad request (e.g., invalid chatId).
+        '401':
+          description: Unauthorized (invalid or missing JWT).
