@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"log"
 	"net/http"
 	"strings"
 
@@ -64,7 +65,13 @@ func SearchUsersAdvanced(c echo.Context) error {
 	// DB検索実行
 	results, err := db.SearchUsersAdvanced(currentUserID, req.Keyword, req.Languages, req.Countries)
 	if err != nil {
+		log.Printf("SearchUsersAdvanced handler error: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to search users: "+err.Error())
+	}
+
+	// 結果が nil の場合は空の配列を返す
+	if results == nil {
+		results = []db.SearchUserResult{}
 	}
 
 	return c.JSON(http.StatusOK, results)
