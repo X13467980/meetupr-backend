@@ -169,11 +169,28 @@ services:
 2. **フロントエンドのAPIベースURL**: フロントエンドの環境変数で、バックエンドのURL（例: `https://meetupr-backend.onrender.com`）を設定
 3. **WebSocket接続**: フロントエンドのWebSocket接続URLもバックエンドのURLに合わせて設定（例: `wss://meetupr-backend.onrender.com/ws/chat/{chatID}`）
 
+## 🔐 Auth0 設定
+
+フロントエンドとバックエンドを本番環境にデプロイする際、Auth0 の設定も更新する必要があります。
+
+詳細は [Auth0 デプロイ設定ガイド](./AUTH0_DEPLOYMENT_SETUP.md) を参照してください。
+
+### 主な設定項目
+
+1. **Application（フロントエンド用）**:
+   - Allowed Callback URLs: `https://meetupr-frontend.vercel.app/callback`
+   - Allowed Logout URLs: `https://meetupr-frontend.vercel.app`
+   - Allowed Web Origins: `https://meetupr-frontend.vercel.app`
+
+2. **API（バックエンド用）**:
+   - Identifier (Audience) が `AUTH0_AUDIENCE` 環境変数と一致していることを確認
+
 ## 📚 参考リンク
 
 - [Render ドキュメント](https://render.com/docs)
 - [Render Go ガイド](https://render.com/docs/deploy-go)
 - [環境変数の管理](https://render.com/docs/environment-variables)
+- [Auth0 デプロイ設定ガイド](./AUTH0_DEPLOYMENT_SETUP.md)
 
 ## 🆘 サポート
 
