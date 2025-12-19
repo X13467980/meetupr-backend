@@ -247,6 +247,18 @@ func GetUserProfile(userID string) (*models.User, error) {
 		}
 	}
 
+	// Get avatar_url separately (to avoid JSON parsing issues with nested profiles)
+	var avatarResults []map[string]interface{}
+	err = Supabase.DB.From("profiles").
+		Select("avatar_url").
+		Eq("user_id", userID).
+		Execute(&avatarResults)
+	if err == nil && len(avatarResults) > 0 {
+		if avatarURL, ok := avatarResults[0]["avatar_url"].(string); ok && avatarURL != "" {
+			user.AvatarURL = avatarURL
+		}
+	}
+
 	return &user, nil
 }
 
@@ -657,7 +669,7 @@ type SearchUserResult struct {
 	Username  string         `json:"username"`
 	Comment   string         `json:"comment"`
 	Residence string         `json:"residence"`
-	AvatarURL string         `json:"avatar_url"`
+	AvatarURL *string        `json:"avatar_url"` // NULLの可能性があるためポインタ型
 	Interests []InterestItem `json:"interests"`
 }
 
@@ -989,7 +1001,10 @@ func SearchUsersAdvanced(currentUserID string, keyword string, languages []strin
 						log.Printf("SearchUsersAdvanced: error getting avatar_url for user %s: %v", userID, err12)
 					}
 				} else if len(avatarResults) > 0 {
-					result.AvatarURL, _ = avatarResults[0]["avatar_url"].(string)
+					if avatarURL, ok := avatarResults[0]["avatar_url"].(string); ok && avatarURL != "" {
+						result.AvatarURL = &avatarURL
+					}
+					// avatar_urlがNULLまたは空文字列の場合は、result.AvatarURLはnilのまま（JSONではnullとして返される）
 				}
 			} else {
 				// フィルター条件がない場合: 全ユーザーを返すため、プロフィール情報も取得
@@ -1036,7 +1051,10 @@ func SearchUsersAdvanced(currentUserID string, keyword string, languages []strin
 						log.Printf("SearchUsersAdvanced: error getting avatar_url for user %s: %v", userID, err13)
 					}
 				} else if len(avatarResults) > 0 {
-					result.AvatarURL, _ = avatarResults[0]["avatar_url"].(string)
+					if avatarURL, ok := avatarResults[0]["avatar_url"].(string); ok && avatarURL != "" {
+						result.AvatarURL = &avatarURL
+					}
+					// avatar_urlがNULLまたは空文字列の場合は、result.AvatarURLはnilのまま（JSONではnullとして返される）
 				}
 			}
 
