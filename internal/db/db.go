@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"meetupr-backend/internal/models"
@@ -666,129 +667,432 @@ type InterestItem struct {
 	Name string `json:"name"`
 }
 
-// SearchUsersAdvanced searches for users with keyword, language, and country filters
+// SearchUsersAdvanced filters users based on keyword, languages, and countries
+// Returns users (excluding current user) whose profile matches the specified criteria:
+//   - keyword: partial match in username (optional)
+//   - languages: users who have any of the specified languages in their profile
+//     (checks native_language, spoken_languages, or learning_languages)
+//   - countries: users who have any of the specified countries in their residence field
+//
 // Excludes the current user from results
 func SearchUsersAdvanced(currentUserID string, keyword string, languages []string, countries []string) ([]SearchUserResult, error) {
 	log.Printf("SearchUsersAdvanced: currentUserID=%s, keyword=%s, languages=%v, countries=%v",
 		currentUserID, keyword, languages, countries)
 
-	// ユーザー情報とプロフィールを結合して取得
-	var results []json.RawMessage
+	// まず、ユーザーIDだけを取得（これは動作する）
+	var userIDs []map[string]interface{}
 	err := Supabase.DB.From("users").
-		Select("id, username, profiles(comment, residence, avatar_url, native_language, spoken_languages, learning_languages), user_interests(interests(id, name))").
+		Select("id").
 		Neq("id", currentUserID).
-		Execute(&results)
+		Execute(&userIDs)
 	if err != nil {
-		log.Printf("SearchUsersAdvanced: error executing query: %v", err)
-		return nil, err
+		errStr := err.Error()
+		log.Printf("SearchUsersAdvanced: error executing basic query: %v", err)
+
+		// unexpected end of JSON input エラーの場合は空の結果を返す
+		if containsIgnoreCase(errStr, "unexpected end of json") ||
+			containsIgnoreCase(errStr, "invalid character") ||
+			containsIgnoreCase(errStr, "not found") ||
+			containsIgnoreCase(errStr, "no rows") {
+			log.Printf("SearchUsersAdvanced: query returned empty or invalid result, returning empty array")
+			return []SearchUserResult{}, nil
+		}
+
+		return nil, fmt.Errorf("failed to search users: %v", err)
 	}
 
-	log.Printf("SearchUsersAdvanced: found %d raw results", len(results))
+	log.Printf("SearchUsersAdvanced: found %d user IDs", len(userIDs))
 
-	// 結果をパースしてフィルタリング
+	// フィルター条件の有無を確認
+	hasFilters := keyword != "" || len(languages) > 0 || len(countries) > 0
+	log.Printf("SearchUsersAdvanced: hasFilters=%v (keyword=%q, languages=%v, countries=%v)",
+		hasFilters, keyword, languages, countries)
+
+	// 結果をパースしてフィルタリング（並列処理で高速化）
 	var searchResults []SearchUserResult
+	var mu sync.Mutex
+	var wg sync.WaitGroup
 
-	for _, raw := range results {
-		var userData struct {
-			ID       string `json:"id"`
-			Username string `json:"username"`
-			Profiles *struct {
-				Comment           string   `json:"comment"`
-				Residence         string   `json:"residence"`
-				AvatarURL         string   `json:"avatar_url"`
-				NativeLanguage    string   `json:"native_language"`
-				SpokenLanguages   []string `json:"spoken_languages"`
-				LearningLanguages []string `json:"learning_languages"`
-			} `json:"profiles"`
-			UserInterests []struct {
-				Interests struct {
-					ID   int    `json:"id"`
-					Name string `json:"name"`
-				} `json:"interests"`
-			} `json:"user_interests"`
-		}
+	// 並列処理の最大数（同時実行数を制限してDBへの負荷を軽減）
+	maxWorkers := 10
+	semaphore := make(chan struct{}, maxWorkers)
 
-		if err := json.Unmarshal(raw, &userData); err != nil {
-			log.Printf("SearchUsersAdvanced: error unmarshalling user: %v", err)
-			continue
-		}
+	for _, userIDMap := range userIDs {
+		wg.Add(1)
+		semaphore <- struct{}{} // セマフォを取得
 
-		// キーワードフィルタ（ユーザー名で部分一致）
-		if keyword != "" {
-			if !containsIgnoreCase(userData.Username, keyword) {
-				continue
-			}
-		}
+		go func(userIDMap map[string]interface{}) {
+			defer wg.Done()
+			defer func() { <-semaphore }() // セマフォを解放
 
-		// 言語フィルタ
-		if len(languages) > 0 && userData.Profiles != nil {
-			matched := false
-			for _, lang := range languages {
-				// native_language, spoken_languages, learning_languages のいずれかに一致
-				if containsIgnoreCase(userData.Profiles.NativeLanguage, lang) {
-					matched = true
-					break
+			// エラーが発生した場合はログを出力してスキップ
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("SearchUsersAdvanced: panic in goroutine: %v", r)
 				}
-				for _, spoken := range userData.Profiles.SpokenLanguages {
-					if containsIgnoreCase(spoken, lang) {
+			}()
+
+			// IDを取得（string型として扱う）
+			userID := ""
+			if idStr, ok := userIDMap["id"].(string); ok {
+				userID = idStr
+			} else if idFloat, ok := userIDMap["id"].(float64); ok {
+				// float64の場合は文字列に変換を試みる（通常は発生しないが念のため）
+				userID = strconv.FormatFloat(idFloat, 'f', -1, 64)
+			}
+
+			if userID == "" {
+				return
+			}
+
+			// usernameを個別に取得
+			var usernameResults []map[string]interface{}
+			err2 := Supabase.DB.From("users").
+				Select("username").
+				Eq("id", userID).
+				Execute(&usernameResults)
+
+			// エラーハンドリング: unexpected end of JSON input エラーは無視して続行
+			if err2 != nil {
+				errStr := err2.Error()
+				if !containsIgnoreCase(errStr, "unexpected end of json") &&
+					!containsIgnoreCase(errStr, "invalid character") {
+					log.Printf("SearchUsersAdvanced: error getting username for user %s: %v", userID, err2)
+				}
+			}
+
+			username := userID // フォールバック
+			if err2 == nil && len(usernameResults) > 0 {
+				if u, ok := usernameResults[0]["username"].(string); ok && u != "" {
+					username = u
+				}
+			}
+
+			// キーワードフィルタ（ユーザー名で部分一致）
+			if keyword != "" {
+				if !containsIgnoreCase(username, keyword) {
+					return
+				}
+			}
+
+			// 言語または国のフィルタがある場合、プロフィール情報を取得する必要がある
+			needProfileInfo := len(languages) > 0 || len(countries) > 0
+
+			profileData := make(map[string]interface{})
+			if needProfileInfo {
+				// プロフィール情報を個別フィールドで取得（複数フィールドの同時取得が失敗するため）
+				// フィルタリングに必要なフィールドのみを先に取得
+
+				// native_language（言語フィルタに必要）
+				if len(languages) > 0 {
+					var nativeLangResults []map[string]interface{}
+					err6 := Supabase.DB.From("profiles").
+						Select("native_language").
+						Eq("user_id", userID).
+						Execute(&nativeLangResults)
+					// unexpected end of JSON input エラーは無視（プロフィールが存在しない場合）
+					if err6 != nil {
+						errStr := err6.Error()
+						if !containsIgnoreCase(errStr, "unexpected end of json") &&
+							!containsIgnoreCase(errStr, "invalid character") {
+							log.Printf("SearchUsersAdvanced: error getting native_language for user %s: %v", userID, err6)
+						}
+					} else if len(nativeLangResults) > 0 {
+						profileData["native_language"], _ = nativeLangResults[0]["native_language"].(string)
+					}
+
+					// spoken_languages（言語フィルタに必要）
+					var spokenLangResults []map[string]interface{}
+					err7 := Supabase.DB.From("profiles").
+						Select("spoken_languages").
+						Eq("user_id", userID).
+						Execute(&spokenLangResults)
+					if err7 != nil {
+						errStr := err7.Error()
+						if !containsIgnoreCase(errStr, "unexpected end of json") &&
+							!containsIgnoreCase(errStr, "invalid character") {
+							log.Printf("SearchUsersAdvanced: error getting spoken_languages for user %s: %v", userID, err7)
+						}
+					} else if len(spokenLangResults) > 0 {
+						profileData["spoken_languages"] = spokenLangResults[0]["spoken_languages"]
+					}
+
+					// learning_languages（言語フィルタに必要）
+					var learningLangResults []map[string]interface{}
+					err8 := Supabase.DB.From("profiles").
+						Select("learning_languages").
+						Eq("user_id", userID).
+						Execute(&learningLangResults)
+					if err8 != nil {
+						errStr := err8.Error()
+						if !containsIgnoreCase(errStr, "unexpected end of json") &&
+							!containsIgnoreCase(errStr, "invalid character") {
+							log.Printf("SearchUsersAdvanced: error getting learning_languages for user %s: %v", userID, err8)
+						}
+					} else if len(learningLangResults) > 0 {
+						profileData["learning_languages"] = learningLangResults[0]["learning_languages"]
+					}
+				}
+
+				// residence（国フィルタに必要、または言語フィルタのみの場合でもレスポンスに含めるため取得）
+				// フロントエンドで国旗表示のために必要
+				var residenceResults []map[string]interface{}
+				err4 := Supabase.DB.From("profiles").
+					Select("residence").
+					Eq("user_id", userID).
+					Execute(&residenceResults)
+				if err4 != nil {
+					errStr := err4.Error()
+					if !containsIgnoreCase(errStr, "unexpected end of json") &&
+						!containsIgnoreCase(errStr, "invalid character") {
+						log.Printf("SearchUsersAdvanced: error getting residence for user %s: %v", userID, err4)
+					} else {
+						// residenceが存在しない場合の警告ログ（デバッグ用）
+						log.Printf("SearchUsersAdvanced: warning - residence not found for user %s", userID)
+					}
+				} else if len(residenceResults) > 0 {
+					profileData["residence"], _ = residenceResults[0]["residence"].(string)
+				} else {
+					// residenceが存在しない場合の警告ログ（デバッグ用）
+					log.Printf("SearchUsersAdvanced: warning - residence not found for user %s", userID)
+				}
+			}
+
+			// 言語フィルタ
+			if len(languages) > 0 {
+				matched := false
+				nativeLang, _ := profileData["native_language"].(string)
+				spokenLangsRaw := profileData["spoken_languages"]
+				learningLangsRaw := profileData["learning_languages"]
+
+				// 配列の型変換を安全に行う
+				var spokenLangs []interface{}
+				if spokenLangsRaw != nil {
+					if arr, ok := spokenLangsRaw.([]interface{}); ok {
+						spokenLangs = arr
+					} else if str, ok := spokenLangsRaw.(string); ok {
+						// JSON文字列の場合、パースを試みる
+						var parsed []interface{}
+						if err := json.Unmarshal([]byte(str), &parsed); err == nil {
+							spokenLangs = parsed
+						}
+					}
+				}
+
+				var learningLangs []interface{}
+				if learningLangsRaw != nil {
+					if arr, ok := learningLangsRaw.([]interface{}); ok {
+						learningLangs = arr
+					} else if str, ok := learningLangsRaw.(string); ok {
+						// JSON文字列の場合、パースを試みる
+						var parsed []interface{}
+						if err := json.Unmarshal([]byte(str), &parsed); err == nil {
+							learningLangs = parsed
+						}
+					}
+				}
+
+				for _, lang := range languages {
+					// native_language, spoken_languages, learning_languages のいずれかに一致
+					if containsIgnoreCase(nativeLang, lang) {
+						matched = true
+						break
+					}
+					for _, spoken := range spokenLangs {
+						if spokenStr, ok := spoken.(string); ok && containsIgnoreCase(spokenStr, lang) {
+							matched = true
+							break
+						}
+					}
+					if matched {
+						break
+					}
+					for _, learning := range learningLangs {
+						if learningStr, ok := learning.(string); ok && containsIgnoreCase(learningStr, lang) {
+							matched = true
+							break
+						}
+					}
+					if matched {
+						break
+					}
+				}
+				if !matched {
+					return
+				}
+			}
+
+			// 国フィルタ（residence）
+			// 注意: フロントエンドからは英語の国コード（ISO 3166-1 alpha-2）が送られてくる
+			// 例: "CN"（中国）, "US"（アメリカ）, "JP"（日本）
+			// データベースのresidenceフィールドも同じ形式で保存されていることを想定
+			if len(countries) > 0 {
+				matched := false
+				residence, _ := profileData["residence"].(string)
+				if residence == "" {
+					// residenceが取得できなかった場合は、このユーザーはマッチしない
+					return
+				}
+				for _, country := range countries {
+					// 大文字小文字を区別せずに比較（国コードは通常大文字だが、念のため）
+					if strings.EqualFold(residence, country) {
 						matched = true
 						break
 					}
 				}
-				if matched {
-					break
+				if !matched {
+					return
 				}
-				for _, learning := range userData.Profiles.LearningLanguages {
-					if containsIgnoreCase(learning, lang) {
-						matched = true
-						break
+			}
+
+			// 結果を構築
+			result := SearchUserResult{
+				UserID:   userID,
+				Username: username,
+			}
+
+			// プロフィール情報を設定
+			// フィルター条件がある場合: フィルタリングに使用したプロフィール情報を設定
+			// フィルター条件がない場合: 全ユーザーを返すため、プロフィール情報も取得
+			if hasFilters {
+				// フィルター条件がある場合: フィルタリングに使用したプロフィール情報を設定
+				// residenceは言語フィルタのみの場合でもレスポンスに含める（フロントエンドで国旗表示のため）
+				if residence, ok := profileData["residence"].(string); ok && residence != "" {
+					result.Residence = residence
+				}
+
+				// commentとavatar_urlは結果に含めるが、フィルタリングには不要なので後で取得
+				var commentResults []map[string]interface{}
+				err11 := Supabase.DB.From("profiles").
+					Select("comment").
+					Eq("user_id", userID).
+					Execute(&commentResults)
+				if err11 != nil {
+					errStr := err11.Error()
+					if !containsIgnoreCase(errStr, "unexpected end of json") &&
+						!containsIgnoreCase(errStr, "invalid character") {
+						log.Printf("SearchUsersAdvanced: error getting comment for user %s: %v", userID, err11)
+					}
+				} else if len(commentResults) > 0 {
+					result.Comment, _ = commentResults[0]["comment"].(string)
+				}
+
+				var avatarResults []map[string]interface{}
+				err12 := Supabase.DB.From("profiles").
+					Select("avatar_url").
+					Eq("user_id", userID).
+					Execute(&avatarResults)
+				if err12 != nil {
+					errStr := err12.Error()
+					if !containsIgnoreCase(errStr, "unexpected end of json") &&
+						!containsIgnoreCase(errStr, "invalid character") {
+						log.Printf("SearchUsersAdvanced: error getting avatar_url for user %s: %v", userID, err12)
+					}
+				} else if len(avatarResults) > 0 {
+					result.AvatarURL, _ = avatarResults[0]["avatar_url"].(string)
+				}
+			} else {
+				// フィルター条件がない場合: 全ユーザーを返すため、プロフィール情報も取得
+				// ただし、パフォーマンスを考慮し、必要最小限の情報のみ取得
+				var commentResults []map[string]interface{}
+				err11 := Supabase.DB.From("profiles").
+					Select("comment").
+					Eq("user_id", userID).
+					Execute(&commentResults)
+				if err11 != nil {
+					errStr := err11.Error()
+					if !containsIgnoreCase(errStr, "unexpected end of json") &&
+						!containsIgnoreCase(errStr, "invalid character") {
+						log.Printf("SearchUsersAdvanced: error getting comment for user %s: %v", userID, err11)
+					}
+				} else if len(commentResults) > 0 {
+					result.Comment, _ = commentResults[0]["comment"].(string)
+				}
+
+				var residenceResults []map[string]interface{}
+				err12 := Supabase.DB.From("profiles").
+					Select("residence").
+					Eq("user_id", userID).
+					Execute(&residenceResults)
+				if err12 != nil {
+					errStr := err12.Error()
+					if !containsIgnoreCase(errStr, "unexpected end of json") &&
+						!containsIgnoreCase(errStr, "invalid character") {
+						log.Printf("SearchUsersAdvanced: error getting residence for user %s: %v", userID, err12)
+					}
+				} else if len(residenceResults) > 0 {
+					result.Residence, _ = residenceResults[0]["residence"].(string)
+				}
+
+				var avatarResults []map[string]interface{}
+				err13 := Supabase.DB.From("profiles").
+					Select("avatar_url").
+					Eq("user_id", userID).
+					Execute(&avatarResults)
+				if err13 != nil {
+					errStr := err13.Error()
+					if !containsIgnoreCase(errStr, "unexpected end of json") &&
+						!containsIgnoreCase(errStr, "invalid character") {
+						log.Printf("SearchUsersAdvanced: error getting avatar_url for user %s: %v", userID, err13)
+					}
+				} else if len(avatarResults) > 0 {
+					result.AvatarURL, _ = avatarResults[0]["avatar_url"].(string)
+				}
+			}
+
+			// 興味情報を取得（パフォーマンス最適化: フィルター条件がない場合は省略）
+			// フィルター条件がない場合、興味情報の取得は省略してパフォーマンスを優先
+			if hasFilters {
+				var userInterestIDs []map[string]interface{}
+				err9 := Supabase.DB.From("user_interests").
+					Select("interest_id").
+					Eq("user_id", userID).
+					Execute(&userInterestIDs)
+				if err9 == nil && len(userInterestIDs) > 0 {
+					// 興味IDのリストを構築
+					interestIDs := make([]int, 0, len(userInterestIDs))
+					for _, uiMap := range userInterestIDs {
+						if interestIDFloat, ok := uiMap["interest_id"].(float64); ok {
+							interestID := int(interestIDFloat)
+							if interestID > 0 {
+								interestIDs = append(interestIDs, interestID)
+							}
+						}
+					}
+
+					// 興味情報を取得（各IDごとに個別クエリ - 最適化の余地あり）
+					// ただし、パフォーマンスを考慮し、最大3件までに制限
+					maxInterests := 3
+					for i, interestID := range interestIDs {
+						if i >= maxInterests {
+							break
+						}
+						var interestInfo []map[string]interface{}
+						err10 := Supabase.DB.From("interests").
+							Select("id, name").
+							Eq("id", strconv.Itoa(interestID)).
+							Execute(&interestInfo)
+						if err10 == nil && len(interestInfo) > 0 {
+							if interestName, ok := interestInfo[0]["name"].(string); ok && interestName != "" {
+								result.Interests = append(result.Interests, InterestItem{
+									ID:   interestID,
+									Name: interestName,
+								})
+							}
+						}
 					}
 				}
-				if matched {
-					break
-				}
 			}
-			if !matched {
-				continue
-			}
-		}
 
-		// 国フィルタ（residence）
-		if len(countries) > 0 && userData.Profiles != nil {
-			matched := false
-			for _, country := range countries {
-				if containsIgnoreCase(userData.Profiles.Residence, country) {
-					matched = true
-					break
-				}
-			}
-			if !matched {
-				continue
-			}
-		}
-
-		// 結果を構築
-		result := SearchUserResult{
-			UserID:   userData.ID,
-			Username: userData.Username,
-		}
-
-		if userData.Profiles != nil {
-			result.Comment = userData.Profiles.Comment
-			result.Residence = userData.Profiles.Residence
-			result.AvatarURL = userData.Profiles.AvatarURL
-		}
-
-		// 趣味を追加
-		for _, ui := range userData.UserInterests {
-			result.Interests = append(result.Interests, InterestItem{
-				ID:   ui.Interests.ID,
-				Name: ui.Interests.Name,
-			})
-		}
-
-		searchResults = append(searchResults, result)
+			// スレッドセーフに結果を追加
+			mu.Lock()
+			searchResults = append(searchResults, result)
+			mu.Unlock()
+		}(userIDMap)
 	}
+
+	// すべてのgoroutineの完了を待つ
+	wg.Wait()
 
 	log.Printf("SearchUsersAdvanced: returning %d filtered results", len(searchResults))
 
