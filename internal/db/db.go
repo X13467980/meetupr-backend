@@ -263,195 +263,87 @@ func GetInterests() ([]models.Interest, error) {
 func GetUserChats(userID string) ([]models.Chat, error) {
 	log.Printf("GetUserChats: fetching chats for user %s", userID)
 
-	// First get all chat IDs (this works - Test 4 confirms)
-	var chatIDs []map[string]interface{}
-	err := Supabase.DB.From("chats").
+	// Optimized: Get chat IDs directly from chats table where user is participant
+	// Since we can't use OR in supabase-go, we'll get chats where user1_id = userID, then user2_id = userID
+	var chatIDs1 []map[string]interface{}
+	err1 := Supabase.DB.From("chats").
 		Select("id").
-		Execute(&chatIDs)
+		Eq("user1_id", userID).
+		Execute(&chatIDs1)
 
-	if err != nil {
-		errStr := err.Error()
-		if containsIgnoreCase(errStr, "unexpected end of json") ||
-			containsIgnoreCase(errStr, "invalid character") ||
-			containsIgnoreCase(errStr, "not found") ||
-			containsIgnoreCase(errStr, "no rows") {
-			log.Printf("No chats found (empty result set)")
-			return []models.Chat{}, nil
-		}
-		return nil, fmt.Errorf("failed to get chat IDs: %v", err)
-	}
+	var chatIDs2 []map[string]interface{}
+	err2 := Supabase.DB.From("chats").
+		Select("id").
+		Eq("user2_id", userID).
+		Execute(&chatIDs2)
 
-	log.Printf("GetUserChats: found %d chat ID(s), using messages table to find user's chats", len(chatIDs))
-
-	// Since Select("id") works for chats but other fields fail,
-	// we'll use the messages table to find which chats the user participates in
-	// This works because GetChatMessages successfully queries messages table
+	// Combine chat IDs
 	userChatIDs := make(map[int64]bool)
-
-	// Get all messages sent by this user to find their chats
-	var userMessages []models.Message
-	err = Supabase.DB.From("messages").
-		Select("chat_id").
-		Eq("sender_id", userID).
-		Execute(&userMessages)
-
-	if err == nil {
-		for _, msg := range userMessages {
-			userChatIDs[msg.ChatID] = true
+	if err1 == nil {
+		for _, chatIDMap := range chatIDs1 {
+			if idFloat, ok := chatIDMap["id"].(float64); ok {
+				userChatIDs[int64(idFloat)] = true
+			}
 		}
 	}
-
-	// Also check messages in chats where user might be recipient
-	// We need to check all messages and see which chats contain this user
-	var allMessages []models.Message
-	err = Supabase.DB.From("messages").
-		Select("chat_id, sender_id").
-		Execute(&allMessages)
-
-	if err == nil {
-		for _, msg := range allMessages {
-			// If message is in a chat we already know about, or if sender is our user
-			if msg.SenderID == userID {
-				userChatIDs[msg.ChatID] = true
+	if err2 == nil {
+		for _, chatIDMap := range chatIDs2 {
+			if idFloat, ok := chatIDMap["id"].(float64); ok {
+				userChatIDs[int64(idFloat)] = true
 			}
 		}
 	}
 
-	log.Printf("GetUserChats: found %d chat(s) from messages for user %s", len(userChatIDs), userID)
+	log.Printf("GetUserChats: found %d chat(s) for user %s", len(userChatIDs), userID)
+
+	if len(userChatIDs) == 0 {
+		return []models.Chat{}, nil
+	}
 
 	// Build chat list from the chat IDs we found
+	// Try to get user1_id and user2_id together first (may fail due to supabase-go issue)
 	chatMap := make(map[int64]models.Chat)
 	for chatID := range userChatIDs {
-		// Try to get user1_id and user2_id from chats table
-		var chatUserInfo []map[string]interface{}
-		err = Supabase.DB.From("chats").
-			Select("user1_id, user2_id").
-			Eq("id", strconv.FormatInt(chatID, 10)).
-			Execute(&chatUserInfo)
-
 		chat := models.Chat{
 			ID: chatID,
 		}
 
+		// Try to get both user1_id and user2_id together
+		var chatUserInfo []map[string]interface{}
+		err := Supabase.DB.From("chats").
+			Select("user1_id, user2_id").
+			Eq("id", strconv.FormatInt(chatID, 10)).
+			Execute(&chatUserInfo)
+
 		if err == nil && len(chatUserInfo) > 0 {
+			// Successfully got both fields together
 			chat.User1ID, _ = chatUserInfo[0]["user1_id"].(string)
 			chat.User2ID, _ = chatUserInfo[0]["user2_id"].(string)
 		} else {
-			// Fallback: set current user as user1_id
-			chat.User1ID = userID
-		}
-
-		// Get message IDs to find senders and last message
-		// We know Select("id") works, so use that
-		var msgIDs []map[string]interface{}
-		err = Supabase.DB.From("messages").
-			Select("id").
-			Eq("chat_id", strconv.FormatInt(chatID, 10)).
-			Execute(&msgIDs)
-
-		if err == nil && len(msgIDs) > 0 {
-			// Get sender IDs from message IDs (try to get sender_id for each message)
-			senderIDs := make(map[string]bool)
-			var lastMsgID int64
-			for i, msgIDMap := range msgIDs {
-				msgIDFloat, ok := msgIDMap["id"].(float64)
-				if !ok {
-					continue
-				}
-				msgID := int64(msgIDFloat)
-				if i == len(msgIDs)-1 {
-					lastMsgID = msgID // Last message ID
-				}
-
-				// Try to get sender_id for this message
-				var senderInfo []map[string]interface{}
-				err2 := Supabase.DB.From("messages").
-					Select("sender_id").
-					Eq("id", strconv.FormatInt(msgID, 10)).
-					Execute(&senderInfo)
-				if err2 == nil && len(senderInfo) > 0 {
-					if senderID, ok := senderInfo[0]["sender_id"].(string); ok {
-						senderIDs[senderID] = true
-					}
-				}
+			// Fallback: get each field separately
+			var user1Results []map[string]interface{}
+			err1 := Supabase.DB.From("chats").
+				Select("user1_id").
+				Eq("id", strconv.FormatInt(chatID, 10)).
+				Execute(&user1Results)
+			if err1 == nil && len(user1Results) > 0 {
+				chat.User1ID, _ = user1Results[0]["user1_id"].(string)
 			}
 
-			// Find the other user (not the current user)
-			for sid := range senderIDs {
-				if sid != userID {
-					chat.User2ID = sid
-					break
-				}
-			}
-
-			// Try to get last message content and sent_at
-			// Since Select with multiple fields fails, get each field separately
-			if lastMsgID > 0 {
-				log.Printf("GetUserChats: trying to get last message %d for chat %d", lastMsgID, chatID)
-
-				// Get each field separately (Select with single field works)
-				content := ""
-				senderID := ""
-				sentAt := time.Now() // Default fallback
-
-				// Get content
-				var contentResults []map[string]interface{}
-				err3 := Supabase.DB.From("messages").
-					Select("content").
-					Eq("id", strconv.FormatInt(lastMsgID, 10)).
-					Execute(&contentResults)
-				if err3 == nil && len(contentResults) > 0 {
-					content, _ = contentResults[0]["content"].(string)
-				}
-
-				// Get sender_id
-				var senderResults []map[string]interface{}
-				err4 := Supabase.DB.From("messages").
-					Select("sender_id").
-					Eq("id", strconv.FormatInt(lastMsgID, 10)).
-					Execute(&senderResults)
-				if err4 == nil && len(senderResults) > 0 {
-					senderID, _ = senderResults[0]["sender_id"].(string)
-				}
-
-				// Get sent_at
-				var sentAtResults []map[string]interface{}
-				err5 := Supabase.DB.From("messages").
-					Select("sent_at").
-					Eq("id", strconv.FormatInt(lastMsgID, 10)).
-					Execute(&sentAtResults)
-				if err5 == nil && len(sentAtResults) > 0 {
-					if sentAtStr, ok := sentAtResults[0]["sent_at"].(string); ok {
-						if parsedTime, err := time.Parse(time.RFC3339, sentAtStr); err == nil {
-							sentAt = parsedTime
-						} else if parsedTime, err := time.Parse("2006-01-02T15:04:05Z07:00", sentAtStr); err == nil {
-							sentAt = parsedTime
-						}
-					}
-				}
-
-				if content != "" {
-					log.Printf("GetUserChats: successfully got last message for chat %d: %s", chatID, content)
-					chat.LastMessage = &models.Message{
-						ID:          lastMsgID,
-						ChatID:      chatID,
-						SenderID:    senderID,
-						Content:     content,
-						MessageType: "text",
-						SentAt:      sentAt,
-					}
-				} else {
-					log.Printf("GetUserChats: last message content is empty for chat %d", chatID)
-				}
-			} else {
-				log.Printf("GetUserChats: lastMsgID is 0 for chat %d", chatID)
+			var user2Results []map[string]interface{}
+			err2 := Supabase.DB.From("chats").
+				Select("user2_id").
+				Eq("id", strconv.FormatInt(chatID, 10)).
+				Execute(&user2Results)
+			if err2 == nil && len(user2Results) > 0 {
+				chat.User2ID, _ = user2Results[0]["user2_id"].(string)
 			}
 		}
 
 		chatMap[chat.ID] = chat
 	}
 
-	log.Printf("GetUserChats: found %d chat(s) for user %s", len(chatMap), userID)
+	log.Printf("GetUserChats: built %d chat(s) for user %s", len(chatMap), userID)
 
 	// Convert map to slice
 	var chats []models.Chat
@@ -464,7 +356,7 @@ func GetUserChats(userID string) ([]models.Chat, error) {
 		return chats[i].ID > chats[j].ID
 	})
 
-	// Populate additional info for each chat
+	// Populate additional info for each chat (optimized: use GetLastChatMessage directly)
 	for i := range chats {
 		chat := &chats[i]
 		// Determine the other user ID
@@ -477,39 +369,25 @@ func GetUserChats(userID string) ([]models.Chat, error) {
 
 		// Get the other user's basic info (エラーが発生しても続行)
 		if otherUserID != "" {
-			log.Printf("GetUserChats: fetching profile for other user %s", otherUserID)
 			otherUser, err := GetUserProfile(otherUserID)
 			if err != nil {
 				log.Printf("error getting other user profile for user %s: %v", otherUserID, err)
 				// Create a minimal user object with just the ID
-				// This ensures the frontend can at least display something
 				chat.OtherUser = &models.User{
 					ID:       otherUserID,
 					Username: otherUserID, // Fallback to ID if username unavailable
 				}
 			} else {
-				log.Printf("GetUserChats: successfully got profile for user %s, username: %s", otherUserID, otherUser.Username)
 				chat.OtherUser = otherUser
 			}
-		} else {
-			log.Printf("GetUserChats: otherUserID is empty for chat %d", chat.ID)
 		}
 
-		// Last message is already set if we got messages above
-		// If not set, try to get it separately
-		if chat.LastMessage == nil {
-			log.Printf("GetUserChats: LastMessage is nil for chat %d, trying GetLastChatMessage", chat.ID)
-			lastMsg, err := GetLastChatMessage(chat.ID)
-			if err != nil {
-				log.Printf("error getting last message for chat %d: %v", chat.ID, err)
-			} else if lastMsg != nil {
-				log.Printf("GetUserChats: successfully got last message via GetLastChatMessage for chat %d: %s", chat.ID, lastMsg.Content)
-				chat.LastMessage = lastMsg
-			} else {
-				log.Printf("GetUserChats: GetLastChatMessage returned nil for chat %d", chat.ID)
-			}
-		} else {
-			log.Printf("GetUserChats: LastMessage already set for chat %d: %s", chat.ID, chat.LastMessage.Content)
+		// Get last message using optimized GetLastChatMessage function
+		lastMsg, err := GetLastChatMessage(chat.ID)
+		if err != nil {
+			log.Printf("error getting last message for chat %d: %v", chat.ID, err)
+		} else if lastMsg != nil {
+			chat.LastMessage = lastMsg
 		}
 	}
 
@@ -572,21 +450,91 @@ func mapToChat(m map[string]interface{}) (models.Chat, error) {
 	return chat, nil
 }
 
-// GetLastChatMessage returns the last message in a chat room
+// GetLastChatMessage returns the last message in a chat room (optimized to only get the last message)
 func GetLastChatMessage(chatID int64) (*models.Message, error) {
-	// Use GetChatMessages which we know works reliably
-	messages, err := GetChatMessages(chatID)
+	// Get the last message ID by getting all message IDs and taking the last one
+	var messageIDs []map[string]interface{}
+	err := Supabase.DB.From("messages").
+		Select("id").
+		Eq("chat_id", strconv.FormatInt(chatID, 10)).
+		Execute(&messageIDs)
+
 	if err != nil {
-		// Return nil instead of error - it's ok if we can't get the last message
+		errStr := err.Error()
+		if containsIgnoreCase(errStr, "unexpected end of json") ||
+			containsIgnoreCase(errStr, "invalid character") ||
+			containsIgnoreCase(errStr, "not found") ||
+			containsIgnoreCase(errStr, "no rows") {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	if len(messageIDs) == 0 {
 		return nil, nil
 	}
 
-	if len(messages) == 0 {
+	// Get the last message ID
+	var lastMsgID int64
+	if idFloat, ok := messageIDs[len(messageIDs)-1]["id"].(float64); ok {
+		lastMsgID = int64(idFloat)
+	} else {
 		return nil, nil
 	}
 
-	// Messages are already sorted ascending, so return the last one
-	return &messages[len(messages)-1], nil
+	// Get each field separately for the last message
+	content := ""
+	senderID := ""
+	sentAt := time.Now()
+
+	// Get content
+	var contentResults []map[string]interface{}
+	err = Supabase.DB.From("messages").
+		Select("content").
+		Eq("id", strconv.FormatInt(lastMsgID, 10)).
+		Execute(&contentResults)
+	if err == nil && len(contentResults) > 0 {
+		content, _ = contentResults[0]["content"].(string)
+	}
+
+	// Get sender_id
+	var senderResults []map[string]interface{}
+	err = Supabase.DB.From("messages").
+		Select("sender_id").
+		Eq("id", strconv.FormatInt(lastMsgID, 10)).
+		Execute(&senderResults)
+	if err == nil && len(senderResults) > 0 {
+		senderID, _ = senderResults[0]["sender_id"].(string)
+	}
+
+	// Get sent_at
+	var sentAtResults []map[string]interface{}
+	err = Supabase.DB.From("messages").
+		Select("sent_at").
+		Eq("id", strconv.FormatInt(lastMsgID, 10)).
+		Execute(&sentAtResults)
+	if err == nil && len(sentAtResults) > 0 {
+		if sentAtStr, ok := sentAtResults[0]["sent_at"].(string); ok {
+			if parsedTime, err := time.Parse(time.RFC3339, sentAtStr); err == nil {
+				sentAt = parsedTime
+			} else if parsedTime, err := time.Parse("2006-01-02T15:04:05Z07:00", sentAtStr); err == nil {
+				sentAt = parsedTime
+			}
+		}
+	}
+
+	if content == "" {
+		return nil, nil
+	}
+
+	return &models.Message{
+		ID:          lastMsgID,
+		ChatID:      chatID,
+		SenderID:    senderID,
+		Content:     content,
+		MessageType: "text",
+		SentAt:      sentAt,
+	}, nil
 }
 
 // GetChatMessages returns all messages in a chat room
