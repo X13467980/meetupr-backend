@@ -665,12 +665,13 @@ func GetChatMessages(chatID int64) ([]models.Message, error) {
 
 // SearchUserResult represents a single user in search results
 type SearchUserResult struct {
-	UserID    string         `json:"user_id"`
-	Username  string         `json:"username"`
-	Comment   string         `json:"comment"`
-	Residence string         `json:"residence"`
-	AvatarURL *string        `json:"avatar_url"` // NULLの可能性があるためポインタ型
-	Interests []InterestItem `json:"interests"`
+	UserID         string         `json:"user_id"`
+	Username       string         `json:"username"`
+	Comment        string         `json:"comment"`
+	Residence      string         `json:"residence"`
+	AvatarURL      *string        `json:"avatar_url"`      // NULLの可能性があるためポインタ型
+	NativeLanguage *string        `json:"native_language"` // NULLの可能性があるためポインタ型（言語コード: "ja", "en", "ko"など）
+	Interests      []InterestItem `json:"interests"`
 }
 
 // InterestItem represents an interest/hobby item
@@ -1006,6 +1007,27 @@ func SearchUsersAdvanced(currentUserID string, keyword string, languages []strin
 					}
 					// avatar_urlがNULLまたは空文字列の場合は、result.AvatarURLはnilのまま（JSONではnullとして返される）
 				}
+
+				// native_languageを取得（言語検索でフィルタリングするために必要）
+				var nativeLangResults []map[string]interface{}
+				err14 := Supabase.DB.From("profiles").
+					Select("native_language").
+					Eq("user_id", userID).
+					Execute(&nativeLangResults)
+				if err14 != nil {
+					errStr := err14.Error()
+					if !containsIgnoreCase(errStr, "unexpected end of json") &&
+						!containsIgnoreCase(errStr, "invalid character") {
+						log.Printf("SearchUsersAdvanced: error getting native_language for user %s: %v", userID, err14)
+					}
+				} else if len(nativeLangResults) > 0 {
+					if nativeLang, ok := nativeLangResults[0]["native_language"].(string); ok && nativeLang != "" {
+						// 言語コードを小文字に変換（ISO 639-1形式: "ja", "en", "ko"など）
+						nativeLangLower := strings.ToLower(strings.TrimSpace(nativeLang))
+						result.NativeLanguage = &nativeLangLower
+					}
+					// native_languageがNULLまたは空文字列の場合は、result.NativeLanguageはnilのまま（JSONではnullとして返される）
+				}
 			} else {
 				// フィルター条件がない場合: 全ユーザーを返すため、プロフィール情報も取得
 				// ただし、パフォーマンスを考慮し、必要最小限の情報のみ取得
@@ -1055,6 +1077,27 @@ func SearchUsersAdvanced(currentUserID string, keyword string, languages []strin
 						result.AvatarURL = &avatarURL
 					}
 					// avatar_urlがNULLまたは空文字列の場合は、result.AvatarURLはnilのまま（JSONではnullとして返される）
+				}
+
+				// native_languageを取得（言語検索でフィルタリングするために必要）
+				var nativeLangResults []map[string]interface{}
+				err14 := Supabase.DB.From("profiles").
+					Select("native_language").
+					Eq("user_id", userID).
+					Execute(&nativeLangResults)
+				if err14 != nil {
+					errStr := err14.Error()
+					if !containsIgnoreCase(errStr, "unexpected end of json") &&
+						!containsIgnoreCase(errStr, "invalid character") {
+						log.Printf("SearchUsersAdvanced: error getting native_language for user %s: %v", userID, err14)
+					}
+				} else if len(nativeLangResults) > 0 {
+					if nativeLang, ok := nativeLangResults[0]["native_language"].(string); ok && nativeLang != "" {
+						// 言語コードを小文字に変換（ISO 639-1形式: "ja", "en", "ko"など）
+						nativeLangLower := strings.ToLower(strings.TrimSpace(nativeLang))
+						result.NativeLanguage = &nativeLangLower
+					}
+					// native_languageがNULLまたは空文字列の場合は、result.NativeLanguageはnilのまま（JSONではnullとして返される）
 				}
 			}
 
