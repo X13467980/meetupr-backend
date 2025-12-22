@@ -22,11 +22,6 @@ OIC（立命館大学大阪いばらきキャンパス）の学生間、特に�
 
 詳細な機能要件については、[プロダクト要件定義書](./docs/REQUIREMENTS.md)を参照してください。
 
-### デプロイ状況
-
-- **本番環境**: Render（`https://meetupr-backend.onrender.com`）
-- **フロントエンド**: Vercel（`https://meetupr-frontend.vercel.app`）
-
 ## 技術スタック
 
 <div align="center">
@@ -149,10 +144,7 @@ meetupr-backend/
 │   ├── API_SPECIFICATION.md     # API仕様書
 │   ├── DATABASE.md              # データベース設計書
 │   ├── REQUIREMENTS.md          # プロダクト要件定義書
-│   ├── IMPLEMENTATION_STATUS.md # 実装状況
 │   ├── FRONTEND_WEBSOCKET_GUIDE.md # フロントエンドWebSocket実装ガイド
-│   ├── RENDER_DEPLOYMENT.md     # Renderデプロイ手順
-│   ├── AUTH0_DEPLOYMENT_SETUP.md # Auth0デプロイ設定ガイド
 │   └── swagger.yaml             # Swagger仕様書
 ├── scripts/                     # ユーティリティスクリプト
 │   ├── seed.go                  # テストデータの作成
@@ -175,10 +167,7 @@ meetupr-backend/
 - [プロダクト要件定義書](./docs/REQUIREMENTS.md)
 - [API仕様書](./docs/API_SPECIFICATION.md)
 - [データベース設計書](./docs/DATABASE.md)
-- [実装状況](./docs/IMPLEMENTATION_STATUS.md)
 - [フロントエンドWebSocket実装ガイド](./docs/FRONTEND_WEBSOCKET_GUIDE.md)
-- [Renderデプロイ手順](./docs/RENDER_DEPLOYMENT.md)
-- [Auth0デプロイ設定ガイド](./docs/AUTH0_DEPLOYMENT_SETUP.md)
 
 ## 主要機能の詳細
 
@@ -338,30 +327,6 @@ go build -o meetupr-backend ./cmd/meetupr-backend
 PORT=8080 ./meetupr-backend
 ```
 
-## デプロイ
-
-### Renderへのデプロイ
-
-詳細な手順は [Renderデプロイ手順](./docs/RENDER_DEPLOYMENT.md) を参照してください。
-
-**クイックスタート**:
-1. RenderでWebサービスを作成
-2. GitHubリポジトリを接続
-3. 環境変数を設定（`AUTH0_DOMAIN`, `AUTH0_AUDIENCE`, `SUPABASE_URL`, `SUPABASE_KEY`, `CORS_ALLOW_ORIGINS`）
-4. デプロイ
-
-`render.yaml`ファイルを使用してRenderにデプロイすることもできます。
-
-### Auth0設定
-
-本番環境デプロイ時は、Auth0の設定も更新が必要です。
-
-詳細は [Auth0デプロイ設定ガイド](./docs/AUTH0_DEPLOYMENT_SETUP.md) を参照してください。
-
-**主な設定項目**:
-- Application: Allowed Callback URLs, Allowed Logout URLs, Allowed Web Origins
-- API: Identifier (Audience) の確認
-
 ## テスト
 
 ### APIテスト
@@ -484,28 +449,6 @@ chore: ビルドプロセスやツールの変更
 - **バックエンド**: 
   - [@X13467980](https://github.com/X13467980) - Youta Yano
   - [@Fukachang](https://github.com/Fukachang) - Ren Sameshima
-
-## 実装状況
-
-### ✅ 実装済み機能
-
-- ✅ ユーザー登録・プロフィール管理
-- ✅ ユーザー検索（キーワード・言語・国によるフィルタリング）
-- ✅ チャット機能（REST API + WebSocket）
-- ✅ 興味・趣味マスタ取得
-- ✅ アバター画像対応
-- ✅ ネイティブ言語フィールド対応
-
-### ⚠️ 部分的実装
-
-- ⚠️ AIテーマ提案: データベースにフィールドは存在するが、API未実装
-
-### ❌ 未実装機能
-
-- ❌ 匿名「会いたい」ボタン
-- ❌ イベント・ミッション提示
-
-詳細は [実装状況](./docs/IMPLEMENTATION_STATUS.md) を参照してください。
 
 ## ライセンス
 
