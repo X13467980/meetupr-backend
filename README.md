@@ -448,7 +448,7 @@ chore: ビルドプロセスやツールの変更
   - [@mikimiki1207](https://github.com/mikimiki1207) - Miki Fujita
 - **バックエンド**: 
   - [@X13467980](https://github.com/X13467980) - Youta Yano
-  - [@Fukachang](https://github.com/Fukachang) - Ren Sameshima
+  - [@moyashi0060](https://github.com/moyashi0060) - Ren Sameshima
 
 ## ライセンス
 
