@@ -8,11 +8,16 @@ MeetUP+Rは、共通の趣味や言語を通じて、自然な出会いや会話
 
 ### 主な機能
 
-- ✅ **認証機能**: Auth0によるJWT認証
-- ✅ **ユーザー管理**: プロフィール作成・更新・検索
-- ✅ **検索機能**: 趣味・興味・言語によるユーザー検索
-- ✅ **チャット機能**: WebSocketによるリアルタイムチャット
+- ✅ **認証機能**: Auth0によるJWT認証（Authorization ヘッダーまたはクエリパラメータ対応）
+- ✅ **ユーザー管理**: プロフィール作成・更新・検索（アバター画像対応）
+- ✅ **検索機能**: キーワード・言語・国による高度なユーザー検索（並列処理で高速化）
+- ✅ **チャット機能**: WebSocketによるリアルタイムチャット（メッセージ履歴対応）
 - ✅ **興味・趣味管理**: マスターデータの取得
+
+### デプロイ状況
+
+- **本番環境**: Render（`https://meetupr-backend.onrender.com`）
+- **フロントエンド**: Vercel（`https://meetupr-frontend.vercel.app`）
 
 ## 🛠️ 技術スタック
 
@@ -124,14 +129,47 @@ go run cmd/meetupr-backend/main.go
 
 | メソッド | エンドポイント | 説明 |
 |---------|--------------|------|
-| GET | `/api/v1/chats` | 参加中のチャット一覧取得 |
+| GET | `/api/v1/chats` | 参加中のチャット一覧取得（`other_user`に`avatar_url`を含む） |
+| GET | `/api/v1/chats/with/{otherUserId}` | チャットの取得または作成 |
+| GET | `/api/v1/chats/{chatId}` | チャット詳細取得 |
 | GET | `/api/v1/chats/{chatId}/messages` | チャットメッセージ取得 |
+
+### 検索 (`/api/v1/search/users`)
+
+| メソッド | エンドポイント | 説明 |
+|---------|--------------|------|
+| GET | `/api/v1/search/users` | ユーザー検索（クエリパラメータ版） |
+| POST | `/api/v1/search/users` | ユーザー検索（リクエストボディ版、推奨） |
+
+**リクエスト例（POST）**:
+```json
+{
+  "keyword": "ユーザー名",
+  "languages": ["日本語", "英語"],
+  "countries": ["CN", "US"]
+}
+```
+
+**レスポンス例**:
+```json
+[
+  {
+    "user_id": "auth0|1234567890",
+    "username": "testuser",
+    "comment": "こんにちは！",
+    "residence": "CN",
+    "avatar_url": "https://...",
+    "native_language": "ja",
+    "interests": [...]
+  }
+]
+```
 
 ### WebSocket
 
 | エンドポイント | 説明 |
 |--------------|------|
-| `/ws/chat/{chatID}` | リアルタイムチャット接続 |
+| `/ws/chat/{chatID}?token={JWT_TOKEN}` | リアルタイムチャット接続（JWTトークンはクエリパラメータで送信） |
 
 詳細なAPI仕様は [API_SPECIFICATION.md](./docs/API_SPECIFICATION.md) または Swagger UI (`http://localhost:8080/swagger/index.html`) を参照してください。
 
@@ -189,15 +227,51 @@ docker build -t meetupr-backend -f build/Dockerfile .
 docker run -p 8080:8080 --env-file .env meetupr-backend
 ```
 
+## 🚀 デプロイ
+
+### Renderへのデプロイ
+
+詳細な手順は [Renderデプロイ手順](./docs/RENDER_DEPLOYMENT.md) を参照してください。
+
+**クイックスタート**:
+1. RenderでWebサービスを作成
+2. GitHubリポジトリを接続
+3. 環境変数を設定（`AUTH0_DOMAIN`, `AUTH0_AUDIENCE`, `SUPABASE_URL`, `SUPABASE_KEY`, `CORS_ALLOW_ORIGINS`）
+4. デプロイ
+
+### Auth0設定
+
+本番環境デプロイ時は、Auth0の設定も更新が必要です。
+
+詳細は [Auth0デプロイ設定ガイド](./docs/AUTH0_DEPLOYMENT_SETUP.md) を参照してください。
+
+**主な設定項目**:
+- Application: Allowed Callback URLs, Allowed Logout URLs, Allowed Web Origins
+- API: Identifier (Audience) の確認
+
 ## 📖 ドキュメント
 
 - [API仕様書](./docs/API_SPECIFICATION.md)
 - [データベース設計](./docs/DATABASE.md)
 - [要件定義書](./docs/REQUIREMENTS.md)
 - [実装状況](./docs/IMPLEMENTATION_STATUS.md)
-- [フロントエンドWebSocket実装ガイド](./docs/FRONTEND_WEBSOCKET_IMPLEMENTATION.md)
+- [フロントエンドWebSocket実装ガイド](./docs/FRONTEND_WEBSOCKET_GUIDE.md)
+- [Renderデプロイ手順](./docs/RENDER_DEPLOYMENT.md)
+- [Auth0デプロイ設定ガイド](./docs/AUTH0_DEPLOYMENT_SETUP.md)
 
 ## 🛠️ 開発
+
+### サーバー起動
+
+```bash
+go run cmd/meetupr-backend/main.go
+```
+
+または、ポート番号を環境変数で指定：
+
+```bash
+PORT=8080 go run cmd/meetupr-backend/main.go
+```
 
 ### コード生成
 
@@ -224,8 +298,23 @@ go run scripts/seed.go
 - `create_test_chat_data.go`: テストチャットデータの作成
 - `create_test_messages.go`: テストメッセージの作成
 - `check_chats.go`: チャットデータの確認
+- `check_avatar_url.go`: ユーザーのアバターURL確認
+- `test_get_or_create_chat.go`: チャット作成APIのテスト
 
 詳細は [scripts/README.md](./scripts/README.md) を参照してください。
+
+## ⚡ パフォーマンス最適化
+
+### 検索APIの最適化
+
+- **並列処理**: goroutineを使用してユーザー情報の取得を並列化
+- **クエリ最適化**: 必要なフィールドのみを個別に取得（Supabaseクライアントの制限対応）
+- **興味情報の制限**: フィルター条件がない場合は興味情報を省略
+
+### チャット一覧APIの最適化
+
+- **クエリ最適化**: チャットIDを直接取得してから詳細情報を取得
+- **最終メッセージの最適化**: 全メッセージを取得せず、最後のメッセージのみを取得
 
 ## 📝 ライセンス
 
@@ -238,7 +327,38 @@ go run scripts/seed.go
 
 ## 🔗 関連リンク
 
+### 開発ツール
 - [Swagger UI](http://localhost:8080/swagger/index.html) (サーバー起動時)
-- [Supabase](https://supabase.com/)
-- [Auth0](https://auth0.com/)
+- [Supabase Dashboard](https://supabase.com/dashboard)
+- [Auth0 Dashboard](https://manage.auth0.com/)
+
+### ドキュメント
 - [Echo Framework](https://echo.labstack.com/)
+- [Supabase Go Client](https://github.com/nedpals/supabase-go)
+- [Gorilla WebSocket](https://github.com/gorilla/websocket)
+
+### デプロイ
+- [Render](https://render.com/)
+- [Vercel](https://vercel.com/)
+
+## 📊 実装状況
+
+### ✅ 実装済み機能
+
+- ✅ ユーザー登録・プロフィール管理
+- ✅ ユーザー検索（キーワード・言語・国によるフィルタリング）
+- ✅ チャット機能（REST API + WebSocket）
+- ✅ 興味・趣味マスタ取得
+- ✅ アバター画像対応
+- ✅ ネイティブ言語フィールド対応
+
+### ⚠️ 部分的実装
+
+- ⚠️ AIテーマ提案: データベースにフィールドは存在するが、API未実装
+
+### ❌ 未実装機能
+
+- ❌ 匿名「会いたい」ボタン
+- ❌ イベント・ミッション提示
+
+詳細は [実装状況](./docs/IMPLEMENTATION_STATUS.md) を参照してください。
