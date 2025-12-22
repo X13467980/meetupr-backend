@@ -90,3 +90,4 @@ func main() {
 		fmt.Printf("\n⚠️  avatar_url is not a string: %T (%v)\n", avatarURL, avatarURL)
 	}
 }
+
